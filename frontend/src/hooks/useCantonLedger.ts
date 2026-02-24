@@ -53,6 +53,7 @@ export interface BoostPoolServiceInfo {
   exitFeeBps: number;
   cooldownSeconds: number;
   paused: boolean;
+  cantonCapRatio: string;
 }
 
 export interface LendingServiceInfo {
@@ -96,6 +97,8 @@ export interface SimpleToken {
   contractId: string;
   amount: string;
   template?: string;
+  depositedAt?: string;
+  unlockAt?: string;
 }
 
 export interface CantonBalancesData {
@@ -113,7 +116,7 @@ export interface CantonBalancesData {
   boostPoolService: BoostPoolServiceInfo | null;
   lendingService: LendingServiceInfo | null;
   priceFeeds: PriceFeedInfo[];
-  directMintService: { contractId: string; paused: boolean } | null;
+  directMintService: { contractId: string; paused: boolean; usdcxMintingEnabled?: boolean } | null;
   smusdTokens: SimpleToken[];
   totalSmusd: string;
   smusdETokens: SimpleToken[];

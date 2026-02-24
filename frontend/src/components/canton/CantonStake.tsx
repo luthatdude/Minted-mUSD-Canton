@@ -58,6 +58,20 @@ function pickExactOrCoveringToken(tokens: SimpleToken[], requested: number): Sim
   return pickCoveringToken(tokens, requested);
 }
 
+function isLPMatured(lp: SimpleToken): boolean {
+  if (!lp.unlockAt) return true; // no unlock info → assume matured
+  return new Date(lp.unlockAt).getTime() <= Date.now();
+}
+
+function formatTimeRemaining(unlockAt: string): string {
+  const diff = new Date(unlockAt).getTime() - Date.now();
+  if (diff <= 0) return "Unlocked";
+  const hours = Math.floor(diff / 3600000);
+  const minutes = Math.floor((diff % 3600000) / 60000);
+  if (hours > 0) return `Unlocks in ${hours}h ${minutes}m`;
+  return `Unlocks in ${minutes}m`;
+}
+
 export function CantonStake() {
   const loopWallet = useLoopWallet();
   const activeParty = loopWallet.partyId || null;
@@ -93,6 +107,8 @@ export function CantonStake() {
   const coinTokens = data?.cantonCoinTokens || [];
   const totalCoin = data?.totalCoin ? parseFloat(data.totalCoin) : 0;
 
+  const usdcxMintingEnabled = data?.directMintService?.usdcxMintingEnabled ?? false;
+
   // Filter USDC vs USDCx for proper routing
   const pureUsdcTokens = usdcTokens.filter(t => t.template !== "USDCx");
   const usdcxTokens = usdcTokens.filter(t => t.template === "USDCx");
@@ -114,6 +130,20 @@ export function CantonStake() {
   const ethPoolTVL = ethPoolService ? parseFloat(ethPoolService.totalMusdStaked) : 0;
   const boostSharePrice = boostPoolService ? parseFloat(boostPoolService.globalSharePrice) : 1.0;
   const boostApy = Math.max(0, (boostSharePrice - 1) * 100);
+  const boostCapRatio = boostPoolService ? parseFloat(boostPoolService.cantonCapRatio) : 0.25;
+  const boostCantonPrice = boostPoolService ? parseFloat(boostPoolService.cantonPriceMusd) : 0.172;
+  const maxQualifiedCtn = boostCantonPrice > 0
+    ? (totalSmusd * smusdSharePrice * boostCapRatio) / boostCantonPrice
+    : 0;
+  // User's existing deposit is totalBoostLP * boostSharePrice (LP shares → CTN value)
+  const userBoostCtnDeposited = totalBoostLP * boostSharePrice;
+  const remainingQualifiedCtn = Math.max(0, maxQualifiedCtn - userBoostCtnDeposited);
+  const exceedsCap = parsedAmount > 0 && parsedAmount > remainingQualifiedCtn + EPSILON;
+
+  // Boost withdraw: matured LP computation
+  const maturedLPs = boostLPTokens.filter(isLPMatured);
+  const maturedLPTotal = maturedLPs.reduce((s, lp) => s + parseTokenAmount(lp), 0);
+  const withdrawExceedsMatured = parsedAmount > 0 && parsedAmount > maturedLPTotal + EPSILON;
 
   async function selectTokenForRequestedAmount(
     party: string,
@@ -291,7 +321,14 @@ export function CantonStake() {
       if (!resp.success) throw new Error(resp.error || "Stake failed");
       setTxSuccess(`Deposited ${fmtAmount(parsedAmount)} ${depositAsset} → smUSD-E shares`);
       setAmount(""); await refresh();
-    } catch (err: any) { setTxError(err.message); }
+    } catch (err: any) {
+      const msg: string = err.message || "";
+      if (msg.includes("USDCX_MINTING_DISABLED")) {
+        setTxError("USDCx staking is disabled on this devnet (DirectMint usdcxIssuer is not configured). Use USDC instead.");
+      } else {
+        setTxError(msg);
+      }
+    }
     finally { setTxLoading(false); }
   }
 
@@ -369,7 +406,14 @@ export function CantonStake() {
       if (!resp.success) throw new Error(resp.error || "Deposit failed");
       setTxSuccess(`Deposited ${fmtAmount(parsedAmount)} CTN → Boost LP`);
       setAmount(""); await refresh();
-    } catch (err: any) { setTxError(err.message); }
+    } catch (err: any) {
+      const msg: string = err.message || "";
+      if (msg.includes("EXCEEDS_SMUSD_QUALIFIED_CAP") || msg.includes("exceeds smusd-qualified cap")) {
+        setTxError(`Deposit exceeds sMUSD-qualified cap (max ~${fmtAmount(remainingQualifiedCtn)} CTN). Stake more mUSD into sMUSD or reduce deposit amount.`);
+      } else {
+        setTxError(msg);
+      }
+    }
     finally { setTxLoading(false); }
   }
 
@@ -378,6 +422,7 @@ export function CantonStake() {
     setTxLoading(true); setTxError(null); setTxSuccess(null);
     try {
       if (!hasConnectedUserParty || !activeParty) throw new Error("Connect your Loop wallet party first.");
+      if (parsedAmount <= 0) throw new Error("Enter a valid CTN amount to withdraw.");
       // Fetch fresh data (Boost Withdraw is consuming)
       const fresh = await fetchFreshBalances(activeParty);
       let freshService = fresh.boostPoolService;
@@ -387,15 +432,57 @@ export function CantonStake() {
       }
       if (!freshService) throw new Error("Boost Pool service not found");
       const freshLP = fresh.boostLPTokens || [];
-      const lp = freshLP[selectedAssetIdx] || freshLP[0];
-      if (!lp) throw new Error("No Boost LP found");
+      const freshMatured = freshLP.filter(isLPMatured);
+      if (freshMatured.length === 0) throw new Error("No matured Boost LP positions. Cooldown has not elapsed.");
+      const freshSharePrice = parseFloat(freshService.globalSharePrice) || 1.0;
+      // Convert requested CTN amount to LP shares needed
+      const lpSharesNeeded = freshSharePrice > 0 ? parsedAmount / freshSharePrice : parsedAmount;
+      const totalMaturedShares = freshMatured.reduce((s, lp) => s + parseTokenAmount(lp), 0);
+      if (lpSharesNeeded > totalMaturedShares + EPSILON) {
+        throw new Error(`Requested ${fmtAmount(parsedAmount)} CTN exceeds matured LP value (~${fmtAmount(totalMaturedShares * freshSharePrice)} CTN).`);
+      }
+      // Pick smallest matured LP that covers the needed shares
+      const sorted = [...freshMatured].sort((a, b) => parseTokenAmount(a) - parseTokenAmount(b));
+      const coveringLP = sorted.find(lp => parseTokenAmount(lp) + EPSILON >= lpSharesNeeded);
+      if (!coveringLP) throw new Error("No single matured LP position large enough. Withdraw a smaller amount.");
+      const coveringAmt = parseTokenAmount(coveringLP);
+      let lpCid = coveringLP.contractId;
+      // Split if covering LP is larger than needed
+      if (coveringAmt > lpSharesNeeded + EPSILON) {
+        const splitResp = await cantonExercise(
+          "BoostPoolLP",
+          coveringLP.contractId,
+          "BPLP_Split",
+          { splitAmount: lpSharesNeeded.toString() },
+          { party: fresh.party }
+        );
+        if (!splitResp.success) throw new Error(splitResp.error || "Failed to split Boost LP.");
+        // Re-fetch to find the exact-size split piece
+        const afterSplit = await fetchFreshBalances(activeParty);
+        const splitLPs = (afterSplit.boostLPTokens || []).filter(isLPMatured);
+        const exact = splitLPs.find(lp => Math.abs(parseTokenAmount(lp) - lpSharesNeeded) < 0.000001);
+        const covering2 = [...splitLPs].sort((a, b) => parseTokenAmount(a) - parseTokenAmount(b))
+          .find(lp => parseTokenAmount(lp) + EPSILON >= lpSharesNeeded);
+        const selectedLP = exact || covering2;
+        if (!selectedLP) throw new Error("Unable to select Boost LP after split.");
+        lpCid = selectedLP.contractId;
+        // Re-fetch service CID too (split consumes service)
+        freshService = afterSplit.boostPoolService || freshService;
+      }
       const resp = await cantonExercise("CantonBoostPoolService", freshService.contractId, "Withdraw", {
-        user: fresh.party, lpCid: lp.contractId,
+        user: fresh.party, lpCid,
       }, { party: fresh.party });
       if (!resp.success) throw new Error(resp.error || "Withdraw failed");
-      setTxSuccess(`Withdrew Boost LP → CTN`);
-      await refresh();
-    } catch (err: any) { setTxError(err.message); }
+      setTxSuccess(`Withdrew ~${fmtAmount(parsedAmount)} CTN from Boost Pool`);
+      setAmount(""); await refresh();
+    } catch (err: any) {
+      const msg: string = err.message || "";
+      if (msg.includes("COOLDOWN_NOT_ELAPSED")) {
+        setTxError("Cooldown period has not elapsed for this LP position. Wait for the unlock time before withdrawing.");
+      } else {
+        setTxError(msg);
+      }
+    }
     finally { setTxLoading(false); }
   }
 
@@ -715,6 +802,11 @@ export function CantonStake() {
                               </button>
                             ))}
                           </div>
+                          {depositAsset === "USDCx" && !usdcxMintingEnabled && (
+                            <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-3 mt-2">
+                              <p className="text-sm text-yellow-400">USDCx staking is disabled on this devnet (DirectMint usdcxIssuer is not configured).</p>
+                            </div>
+                          )}
                         </div>
                         {/* Lock Tier */}
                         <div className="space-y-3">
@@ -763,7 +855,7 @@ export function CantonStake() {
                             <p className="text-sm text-gray-400">No {depositAsset} tokens available on Canton</p>
                           </div>
                         )}
-                        <TxButton onClick={handleEthPoolStake} loading={txLoading} disabled={selectedDepositTokens.length === 0 || parsedAmount <= 0} className="w-full">
+                        <TxButton onClick={handleEthPoolStake} loading={txLoading} disabled={selectedDepositTokens.length === 0 || parsedAmount <= 0 || (depositAsset === "USDCx" && !usdcxMintingEnabled)} className="w-full">
                           Stake {depositAsset} → smUSD-E
                         </TxButton>
                       </>
@@ -935,7 +1027,7 @@ export function CantonStake() {
                                 <div className="flex items-center gap-2">
                                   <button
                                     className="rounded-lg bg-yellow-500/20 px-3 py-1.5 text-xs font-semibold text-yellow-300 transition-colors hover:bg-yellow-500/30"
-                                    onClick={() => setAmount(toInputAmount(totalCoin))}
+                                    onClick={() => setAmount(toInputAmount(Math.min(totalCoin, remainingQualifiedCtn)))}
                                   >
                                     MAX
                                   </button>
@@ -949,6 +1041,29 @@ export function CantonStake() {
                           {smusdTokens.length === 0 && (
                             <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-4">
                               <p className="text-sm text-yellow-400">You need smUSD to verify eligibility for the Boost Pool. Stake mUSD first.</p>
+                            </div>
+                          )}
+                          {smusdTokens.length > 0 && (
+                            <div className="space-y-2 rounded-xl border border-white/10 bg-surface-800/30 p-4">
+                              <div className="flex items-center justify-between text-sm">
+                                <span className="text-gray-400">Max Qualified Deposit</span>
+                                <span className="text-white font-medium">{fmtAmount(maxQualifiedCtn)} CTN</span>
+                              </div>
+                              {userBoostCtnDeposited > EPSILON && (
+                                <div className="flex items-center justify-between text-sm">
+                                  <span className="text-gray-400">Already Deposited</span>
+                                  <span className="text-white font-medium">{fmtAmount(userBoostCtnDeposited)} CTN</span>
+                                </div>
+                              )}
+                              <div className="flex items-center justify-between text-sm">
+                                <span className="text-gray-400">Remaining Qualified</span>
+                                <span className={`font-medium ${remainingQualifiedCtn < EPSILON ? "text-red-400" : "text-emerald-400"}`}>{fmtAmount(remainingQualifiedCtn)} CTN</span>
+                              </div>
+                            </div>
+                          )}
+                          {exceedsCap && (
+                            <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4">
+                              <p className="text-sm text-red-400">Deposit exceeds sMUSD-qualified cap. Stake more mUSD into sMUSD or reduce deposit amount.</p>
                             </div>
                           )}
                           <div className="space-y-2 rounded-xl bg-surface-800/30 p-4">
@@ -965,7 +1080,7 @@ export function CantonStake() {
                               <span className="text-white font-medium">{parseFloat(boostPoolService.cantonPriceMusd).toFixed(4)} mUSD</span>
                             </div>
                           </div>
-                          <TxButton onClick={handleBoostDeposit} loading={txLoading} disabled={coinTokens.length === 0 || smusdTokens.length === 0 || parsedAmount <= 0} className="w-full">
+                          <TxButton onClick={handleBoostDeposit} loading={txLoading} disabled={coinTokens.length === 0 || smusdTokens.length === 0 || parsedAmount <= 0 || exceedsCap} className="w-full">
                             Deposit CTN \u2192 Boost LP
                           </TxButton>
                         </>
@@ -982,22 +1097,64 @@ export function CantonStake() {
                           <p className="text-sm text-gray-500 mt-1">Switch to Deposit tab to create a position</p>
                         </div>
                       ) : (
-                        <div className="space-y-3">
-                          <label className="text-sm font-medium text-gray-400">Select Boost LP to Withdraw</label>
-                          {boostLPTokens.map((lp, idx) => (
-                            <button key={lp.contractId} onClick={() => setSelectedAssetIdx(idx)}
-                              className={`w-full rounded-xl border p-4 text-left transition-all ${selectedAssetIdx === idx ? "border-yellow-500 bg-yellow-500/10" : "border-white/10 bg-surface-800/50 hover:border-white/30"}`}>
-                              <div className="flex items-center justify-between">
-                                <div>
-                                  <span className="font-semibold text-white">{fmtAmount(lp.amount, 4)} Boost LP</span>
-                                  <p className="text-xs text-gray-500 mt-1">\u2248 {fmtAmount(parseFloat(lp.amount) * parseFloat(boostPoolService.globalSharePrice))} CTN</p>
+                        <div className="space-y-4">
+                          {/* Amount input */}
+                          <div className="space-y-3">
+                            <div className="flex items-center justify-between">
+                              <label className="text-sm font-medium text-gray-400">Withdraw CTN Amount</label>
+                              <span className="text-xs text-gray-500">Withdrawable: {fmtAmount(maturedLPTotal * boostSharePrice)} CTN</span>
+                            </div>
+                            <div className="relative rounded-xl border border-white/10 bg-surface-800/50 p-4 transition-all duration-300 focus-within:border-yellow-500/50">
+                              <div className="flex items-center gap-4">
+                                <input
+                                  type="number"
+                                  className="flex-1 bg-transparent text-2xl font-semibold text-white placeholder-gray-600 focus:outline-none"
+                                  placeholder="0.00"
+                                  value={amount}
+                                  onChange={(e) => setAmount(e.target.value)}
+                                />
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    className="rounded-lg bg-yellow-500/20 px-3 py-1.5 text-xs font-semibold text-yellow-300 transition-colors hover:bg-yellow-500/30"
+                                    onClick={() => setAmount(toInputAmount(maturedLPTotal * boostSharePrice))}
+                                  >
+                                    MAX
+                                  </button>
+                                  <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
+                                    <span className="font-semibold text-white">CTN</span>
+                                  </div>
                                 </div>
-                                <span className="rounded-full bg-yellow-500/20 px-2 py-0.5 text-xs text-yellow-400">Active</span>
                               </div>
-                            </button>
-                          ))}
-                          <TxButton onClick={handleBoostWithdraw} loading={txLoading} disabled={boostLPTokens.length === 0} className="w-full">
-                            Withdraw Boost LP \u2192 CTN
+                            </div>
+                          </div>
+                          {withdrawExceedsMatured && (
+                            <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-3">
+                              <p className="text-sm text-red-400">Requested amount exceeds matured LP value (~{fmtAmount(maturedLPTotal * boostSharePrice)} CTN). Wait for cooldown or reduce amount.</p>
+                            </div>
+                          )}
+                          {/* Per-position cooldown status */}
+                          <div className="space-y-2">
+                            <label className="text-sm font-medium text-gray-400">Your Positions</label>
+                            {boostLPTokens.map((lp) => {
+                              const matured = isLPMatured(lp);
+                              const ctnValue = parseTokenAmount(lp) * boostSharePrice;
+                              return (
+                                <div key={lp.contractId} className={`rounded-xl border p-3 ${matured ? "border-emerald-500/30 bg-emerald-500/5" : "border-white/10 bg-surface-800/50"}`}>
+                                  <div className="flex items-center justify-between">
+                                    <div>
+                                      <span className="font-medium text-white">{fmtAmount(ctnValue)} CTN</span>
+                                      <span className="text-xs text-gray-500 ml-2">({fmtAmount(lp.amount, 4)} LP)</span>
+                                    </div>
+                                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${matured ? "bg-emerald-500/20 text-emerald-400" : "bg-yellow-500/20 text-yellow-400"}`}>
+                                      {matured ? "Unlocked" : lp.unlockAt ? formatTimeRemaining(lp.unlockAt) : "Locked"}
+                                    </span>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <TxButton onClick={handleBoostWithdraw} loading={txLoading} disabled={boostLPTokens.length === 0 || parsedAmount <= 0 || withdrawExceedsMatured || maturedLPs.length === 0} className="w-full">
+                            Withdraw CTN from Boost Pool
                           </TxButton>
                         </div>
                       )
@@ -1022,6 +1179,10 @@ export function CantonStake() {
                     <div className="flex items-center justify-between text-sm"><span className="text-gray-400">Boost LP</span><span className="text-white font-medium">{fmtAmount(totalBoostLP, 4)} ({boostLPTokens.length})</span></div>
                     <div className="flex items-center justify-between text-sm"><span className="text-gray-400">Canton Coin</span><span className="text-white font-medium">{fmtAmount(totalCoin)} ({coinTokens.length})</span></div>
                     <div className="flex items-center justify-between text-sm"><span className="text-gray-400">smUSD (eligibility)</span><span className="text-white font-medium">{fmtAmount(totalSmusd, 4)} ({smusdTokens.length})</span></div>
+                    <div className="divider my-2" />
+                    <div className="flex items-center justify-between text-sm"><span className="text-gray-400">Cap Ratio</span><span className="text-white font-medium">{(boostCapRatio * 100).toFixed(0)}%</span></div>
+                    <div className="flex items-center justify-between text-sm"><span className="text-gray-400">Qualified Cap</span><span className="text-emerald-400 font-medium">{fmtAmount(maxQualifiedCtn)} CTN</span></div>
+                    <div className="flex items-center justify-between text-sm"><span className="text-gray-400">Remaining</span><span className={`font-medium ${remainingQualifiedCtn < EPSILON ? "text-red-400" : "text-emerald-400"}`}>{fmtAmount(remainingQualifiedCtn)} CTN</span></div>
                   </div>
                 </div>
                 <div className="card overflow-hidden border-l-4 border-yellow-500">

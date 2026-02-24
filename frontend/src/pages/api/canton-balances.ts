@@ -38,7 +38,7 @@ const DEFAULT_RECIPIENT_ALIAS_MAP: Record<string, string> = {
 const PACKAGE_ID =
   process.env.NEXT_PUBLIC_DAML_PACKAGE_ID ||
   process.env.CANTON_PACKAGE_ID ||
-  "0489a86388cc81e3e0bee8dc8f6781229d0e01451c1f2d19deea594255e5993b";
+  "";
 const CIP56_PACKAGE_ID =
   process.env.NEXT_PUBLIC_CIP56_PACKAGE_ID ||
   process.env.CIP56_PACKAGE_ID ||
@@ -139,6 +139,7 @@ interface BoostPoolServiceInfo {
   exitFeeBps: number;
   cooldownSeconds: number;
   paused: boolean;
+  cantonCapRatio: string;
 }
 
 interface LendingServiceInfo {
@@ -182,6 +183,8 @@ interface SimpleToken {
   contractId: string;
   amount: string;
   template?: string;
+  depositedAt?: string;
+  unlockAt?: string;
 }
 
 interface BalancesResponse {
@@ -199,7 +202,7 @@ interface BalancesResponse {
   boostPoolService: BoostPoolServiceInfo | null;
   lendingService: LendingServiceInfo | null;
   priceFeeds: PriceFeedInfo[];
-  directMintService: { contractId: string; paused: boolean; serviceName?: string; hasValidCompliance?: boolean } | null;
+  directMintService: { contractId: string; paused: boolean; serviceName?: string; hasValidCompliance?: boolean; usdcxMintingEnabled?: boolean } | null;
   smusdTokens: SimpleToken[];
   totalSmusd: string;
   smusdETokens: SimpleToken[];
@@ -377,7 +380,10 @@ export default async function handler(
     let ethPoolHasValidCompliance = false;
     let boostPoolService: BoostPoolServiceInfo | null = null;
     let lendingService: LendingServiceInfo | null = null;
-    let directMintService: { contractId: string; paused: boolean; serviceName?: string; hasValidCompliance?: boolean } | null = null;
+    type DirectMintEntry = { contractId: string; paused: boolean; serviceName?: string; hasValidCompliance?: boolean; usdcxMintingEnabled?: boolean };
+    const directMintByCid = new Map<string, DirectMintEntry>();
+    let directMintFallback: DirectMintEntry | null = null;
+    let ethPoolDirectMintCid: string | null = null;
     let stakingHasValidCompliance = false;
     const smusdTokens: SimpleToken[] = [];
     const smusdETokens: SimpleToken[] = [];
@@ -501,6 +507,8 @@ export default async function handler(
             || (hasValidCompliance === ethPoolHasValidCompliance && isPaused === ethPoolService.paused && tvl > prevTvl)) {
           ethPoolService = candidate;
           ethPoolHasValidCompliance = hasValidCompliance;
+          // Capture the DirectMint CID linked to the selected ETHPool
+          if (p.directMintServiceCid) ethPoolDirectMintCid = p.directMintServiceCid as string;
         }
       } else if (entityName === "CantonBoostPoolService") {
         const p = evt.createArgument;
@@ -514,6 +522,7 @@ export default async function handler(
           exitFeeBps: parseInt(String(p.exitFeeBps || "50"), 10),
           cooldownSeconds: parseInt(String(p.cooldownSeconds || "86400"), 10),
           paused: p.paused === true || p.paused === "True",
+          cantonCapRatio: (p.cantonCapRatio as string) || "0.25",
         };
       } else if (entityName === "CantonLendingService") {
         const p = evt.createArgument;
@@ -530,7 +539,8 @@ export default async function handler(
             };
           }
         }
-        lendingService = {
+        const isPaused = p.paused === true || p.paused === "True";
+        const candidate: LendingServiceInfo = {
           contractId: evt.contractId,
           totalBorrows: (p.totalBorrows as string) || "0",
           interestRateBps: parseInt(String(p.interestRateBps || "500"), 10),
@@ -538,11 +548,18 @@ export default async function handler(
           protocolReserves: (p.protocolReserves as string) || "0",
           minBorrow: (p.minBorrow as string) || "100",
           closeFactorBps: parseInt(String(p.closeFactorBps || "5000"), 10),
-          paused: p.paused === true || p.paused === "True",
+          paused: isPaused,
           cantonSupplyCap: (p.cantonSupplyCap as string) || "0",
           cantonCurrentSupply: (p.cantonCurrentSupply as string) || "0",
           configs,
         };
+        // Deterministic selection: prefer unpaused, then highest config count, then highest totalBorrows
+        if (!lendingService
+            || (!isPaused && lendingService.paused)
+            || (isPaused === lendingService.paused && Object.keys(configs).length > Object.keys(lendingService.configs).length)
+            || (isPaused === lendingService.paused && Object.keys(configs).length === Object.keys(lendingService.configs).length && parseFloat(candidate.totalBorrows) > parseFloat(lendingService.totalBorrows))) {
+          lendingService = candidate;
+        }
       } else if (entityName === "CantonPriceFeed") {
         const p = evt.createArgument;
         priceFeeds.push({
@@ -565,6 +582,7 @@ export default async function handler(
         boostLPTokens.push({
           contractId: evt.contractId,
           amount: (p.shares as string) || (p.amount as string) || "0",
+          depositedAt: (p.depositedAt as string) || evt.createdAt || "",
         });
       } else if (entityName === "EscrowedCollateral") {
         const p = evt.createArgument;
@@ -588,21 +606,22 @@ export default async function handler(
         });
       } else if (entityName === "CantonDirectMintService") {
         const p = evt.createArgument;
-        // Pick the best service: prefer unpaused + valid complianceRegistryCid
         const isPaused = p.paused === true || p.paused === "True";
         const compCid = (p.complianceRegistryCid as string) || "";
         const hasValidCompliance = compCid.length > 10 && !compCid.match(/^0+$/);
-        const candidate = {
+        const candidate: DirectMintEntry = {
           contractId: evt.contractId,
           paused: isPaused,
           serviceName: (p.serviceName as string) || "",
           hasValidCompliance,
+          usdcxMintingEnabled: p.usdcxIssuer !== null && p.usdcxIssuer !== undefined,
         };
-        // Prefer: (1) valid compliance, (2) unpaused, (3) latest seen
-        if (!directMintService
-            || (hasValidCompliance && !directMintService.hasValidCompliance)
-            || (hasValidCompliance === directMintService.hasValidCompliance && !isPaused && directMintService.paused)) {
-          directMintService = candidate;
+        directMintByCid.set(evt.contractId, candidate);
+        // Track best fallback: prefer (1) valid compliance, (2) unpaused
+        if (!directMintFallback
+            || (hasValidCompliance && !directMintFallback.hasValidCompliance)
+            || (hasValidCompliance === directMintFallback.hasValidCompliance && !isPaused && directMintFallback.paused)) {
+          directMintFallback = candidate;
         }
       } else if (entityName === "CantonSMUSD") {
         const p = evt.createArgument;
@@ -648,7 +667,7 @@ export default async function handler(
     if (
       effectiveParty !== CANTON_PARTY &&
       (
-        !directMintService ||
+        !directMintFallback ||
         !bridgeService ||
         !supplyService ||
         !stakingService ||
@@ -658,15 +677,19 @@ export default async function handler(
       )
     ) {
       try {
-        const operatorTemplates = [
-          templateId("Minted.Protocol.V3", "BridgeService"),
-          templateId("Minted.Protocol.V3", "MUSDSupplyService"),
-          templateId("CantonDirectMint", "CantonDirectMintService"),
-          templateId("CantonSMUSD", "CantonStakingService"),
-          templateId("CantonETHPool", "CantonETHPoolService"),
-          templateId("CantonBoostPool", "CantonBoostPoolService"),
-          templateId("CantonLending", "CantonLendingService"),
+        const operatorServiceEntities = [
+          ["Minted.Protocol.V3", "BridgeService"],
+          ["Minted.Protocol.V3", "MUSDSupplyService"],
+          ["CantonDirectMint", "CantonDirectMintService"],
+          ["CantonSMUSD", "CantonStakingService"],
+          ["CantonETHPool", "CantonETHPoolService"],
+          ["CantonBoostPool", "CantonBoostPoolService"],
+          ["CantonLending", "CantonLendingService"],
+          ["CantonLending", "CantonPriceFeed"],
         ] as const;
+        const operatorTemplates = operatorServiceEntities.flatMap(([mod, entity]) =>
+          V3_PACKAGE_IDS.map((pkg) => `${pkg}:${mod}:${entity}`)
+        );
 
         const operatorGroups = await Promise.all(
           operatorTemplates.map((tpl) => queryTemplateEntries(CANTON_PARTY, offset, tpl))
@@ -743,6 +766,7 @@ export default async function handler(
             ) {
               ethPoolService = candidate;
               ethPoolHasValidCompliance = hasValidCompliance;
+              if (p.directMintServiceCid) ethPoolDirectMintCid = p.directMintServiceCid as string;
             }
           } else if (entityName === "CantonBoostPoolService") {
             const p = evt.createArgument;
@@ -756,6 +780,7 @@ export default async function handler(
               exitFeeBps: parseInt(String(p.exitFeeBps || "50"), 10),
               cooldownSeconds: parseInt(String(p.cooldownSeconds || "86400"), 10),
               paused: p.paused === true || p.paused === "True",
+              cantonCapRatio: (p.cantonCapRatio as string) || "0.25",
             };
           } else if (entityName === "CantonLendingService") {
             const p = evt.createArgument;
@@ -771,7 +796,8 @@ export default async function handler(
                 };
               }
             }
-            lendingService = {
+            const isPaused = p.paused === true || p.paused === "True";
+            const candidate: LendingServiceInfo = {
               contractId: evt.contractId,
               totalBorrows: (p.totalBorrows as string) || "0",
               interestRateBps: parseInt(String(p.interestRateBps || "500"), 10),
@@ -779,30 +805,51 @@ export default async function handler(
               protocolReserves: (p.protocolReserves as string) || "0",
               minBorrow: (p.minBorrow as string) || "100",
               closeFactorBps: parseInt(String(p.closeFactorBps || "5000"), 10),
-              paused: p.paused === true || p.paused === "True",
+              paused: isPaused,
               cantonSupplyCap: (p.cantonSupplyCap as string) || "0",
               cantonCurrentSupply: (p.cantonCurrentSupply as string) || "0",
               configs,
             };
+            if (!lendingService
+                || (!isPaused && lendingService.paused)
+                || (isPaused === lendingService.paused && Object.keys(configs).length > Object.keys(lendingService.configs).length)
+                || (isPaused === lendingService.paused && Object.keys(configs).length === Object.keys(lendingService.configs).length && parseFloat(candidate.totalBorrows) > parseFloat(lendingService.totalBorrows))) {
+              lendingService = candidate;
+            }
           } else if (entityName === "CantonDirectMintService") {
             const p = evt.createArgument;
             const isPaused = p.paused === true || p.paused === "True";
             const compCid = (p.complianceRegistryCid as string) || "";
             const hasValidCompliance = compCid.length > 10 && !compCid.match(/^0+$/);
-            const candidate = {
+            const candidate: DirectMintEntry = {
               contractId: evt.contractId,
               paused: isPaused,
               serviceName: (p.serviceName as string) || "",
               hasValidCompliance,
+              usdcxMintingEnabled: p.usdcxIssuer !== null && p.usdcxIssuer !== undefined,
             };
+            directMintByCid.set(evt.contractId, candidate);
             if (
-              !directMintService ||
-              (hasValidCompliance && !directMintService.hasValidCompliance) ||
-              (hasValidCompliance === directMintService.hasValidCompliance &&
+              !directMintFallback ||
+              (hasValidCompliance && !directMintFallback.hasValidCompliance) ||
+              (hasValidCompliance === directMintFallback.hasValidCompliance &&
                 !isPaused &&
-                directMintService.paused)
+                directMintFallback.paused)
             ) {
-              directMintService = candidate;
+              directMintFallback = candidate;
+            }
+          } else if (entityName === "CantonPriceFeed") {
+            // Merge operator-visible price feeds when user query returned none
+            const p = evt.createArgument;
+            const operatorFeed: PriceFeedInfo = {
+              contractId: evt.contractId,
+              asset: (p.symbol as string) || "",
+              priceMusd: (p.priceUsd as string) || "0",
+              lastUpdate: (p.lastUpdated as string) || evt.createdAt || "",
+            };
+            const alreadyHas = priceFeeds.some((f) => f.contractId === operatorFeed.contractId);
+            if (!alreadyHas) {
+              priceFeeds.push(operatorFeed);
             }
           }
         }
@@ -811,6 +858,25 @@ export default async function handler(
           "Canton balances service fallback failed:",
           (fallbackErr as Error)?.message || fallbackErr
         );
+      }
+    }
+
+    // Resolve directMintService: anchor to ETHPool's linked CID when available
+    let directMintService: DirectMintEntry | null = null;
+    if (ethPoolDirectMintCid && directMintByCid.has(ethPoolDirectMintCid)) {
+      directMintService = directMintByCid.get(ethPoolDirectMintCid)!;
+    } else {
+      directMintService = directMintFallback;
+    }
+
+    // Compute unlockAt for Boost LP positions using cooldownSeconds from service
+    const boostCooldownSec = boostPoolService?.cooldownSeconds || 86400;
+    for (const lp of boostLPTokens) {
+      if (lp.depositedAt) {
+        const depositMs = new Date(lp.depositedAt).getTime();
+        if (Number.isFinite(depositMs)) {
+          lp.unlockAt = new Date(depositMs + boostCooldownSec * 1000).toISOString();
+        }
       }
     }
 

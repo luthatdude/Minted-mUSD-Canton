@@ -175,10 +175,16 @@ export function CantonBorrow() {
   const userMusdTokens = useMemo(() => data?.tokens || [], [data?.tokens]);
   const userMusdBalance = userMusdTokens.reduce((sum, token) => sum + parseFloat(token.amount || "0"), 0);
 
+  // Merge user + operator price feeds so collateral valuation works even when
+  // the user party cannot directly see operator-created CantonPriceFeed contracts.
+  const effectiveFeeds = useMemo(
+    () => mergePriceFeeds(data || ({ priceFeeds: [] } as unknown as CantonBalancesData), operatorData),
+    [data, operatorData]
+  );
+
   const collateralInfos = useMemo<CantonCollateralInfo[]>(() => {
-    const feeds = data?.priceFeeds || [];
     const feedMap = new Map<string, number>();
-    for (const feed of feeds) {
+    for (const feed of effectiveFeeds) {
       const price = parseFloat(feed.priceMusd || "0");
       feedMap.set(normalizeKey(feed.asset), Number.isFinite(price) ? price : 0);
     }
@@ -208,7 +214,31 @@ export function CantonBorrow() {
         liqPenalty: cfg?.liqPenaltyBps || 0,
       };
     });
-  }, [data?.priceFeeds, userEscrows, lendingService?.configs]);
+  }, [effectiveFeeds, userEscrows, lendingService?.configs]);
+
+  // Only show collateral types that have a config entry in the deployed lending service.
+  const supportedCollateralAssets = useMemo<CollateralAsset[]>(() => {
+    const configs = lendingService?.configs || {};
+    const supported: CollateralAsset[] = [];
+    for (const [collateralType, asset] of Object.entries(COLLATERAL_TYPE_TO_ASSET)) {
+      if (configs[collateralType]) {
+        supported.push(asset);
+      }
+    }
+    return supported.length > 0 ? supported : (Object.keys(COLLATERAL_META) as CollateralAsset[]);
+  }, [lendingService?.configs]);
+
+  // Auto-fallback: if selected asset not in supported list, switch to first supported.
+  useEffect(() => {
+    if (supportedCollateralAssets.length > 0 && !supportedCollateralAssets.includes(collateralAsset)) {
+      setCollateralAsset(supportedCollateralAssets[0]);
+    }
+  }, [supportedCollateralAssets, collateralAsset]);
+
+  const supportedCollateralInfos = useMemo(
+    () => collateralInfos.filter((info) => supportedCollateralAssets.includes(info.key)),
+    [collateralInfos, supportedCollateralAssets]
+  );
 
   const selectedCollateralInfo = collateralInfos.find((info) => info.key === collateralAsset) || null;
   const selectedAssetContracts = getAssetContracts(collateralAsset, data);
@@ -251,20 +281,24 @@ export function CantonBorrow() {
     }
   }, [action, collateralAsset, userEscrows]);
 
-  const outstandingDebt = userDebts.reduce(
+  const DEBT_DUST_EPSILON = 0.0001;
+  const rawOutstandingDebt = userDebts.reduce(
     (sum, row) => sum + parseFloat(row.debtMusd || "0") + parseFloat(row.interestAccrued || "0"),
     0
   );
-  const totalCollateralUsd = collateralInfos.reduce((sum, row) => sum + row.valueUsd, 0);
-  const borrowCapacityUsd = collateralInfos.reduce((sum, row) => sum + (row.valueUsd * row.factorBps) / 10000, 0);
+  const hasDustDebt = rawOutstandingDebt > 0 && rawOutstandingDebt < DEBT_DUST_EPSILON;
+  const outstandingDebt = hasDustDebt ? 0 : rawOutstandingDebt;
+  // Use only supported collateral for aggregate valuations (unsupported types have 0 factorBps anyway)
+  const totalCollateralUsd = supportedCollateralInfos.reduce((sum, row) => sum + row.valueUsd, 0);
+  const borrowCapacityUsd = supportedCollateralInfos.reduce((sum, row) => sum + (row.valueUsd * row.factorBps) / 10000, 0);
   const maxBorrowableUsd = Math.max(borrowCapacityUsd - outstandingDebt, 0);
-  const liquidationValueUsd = collateralInfos.reduce((sum, row) => sum + (row.valueUsd * row.liqThreshold) / 10000, 0);
+  const liquidationValueUsd = supportedCollateralInfos.reduce((sum, row) => sum + (row.valueUsd * row.liqThreshold) / 10000, 0);
   const healthFactor = outstandingDebt > 0 ? liquidationValueUsd / outstandingDebt : 99;
   const weightedMaxLtvBps = totalCollateralUsd > 0
-    ? collateralInfos.reduce((sum, row) => sum + (row.valueUsd * row.factorBps), 0) / totalCollateralUsd
+    ? supportedCollateralInfos.reduce((sum, row) => sum + (row.valueUsd * row.factorBps), 0) / totalCollateralUsd
     : 0;
   const weightedLiqThresholdBps = totalCollateralUsd > 0
-    ? collateralInfos.reduce((sum, row) => sum + (row.valueUsd * row.liqThreshold), 0) / totalCollateralUsd
+    ? supportedCollateralInfos.reduce((sum, row) => sum + (row.valueUsd * row.liqThreshold), 0) / totalCollateralUsd
     : 0;
   const currentLtvPct = totalCollateralUsd > 0 ? (outstandingDebt / totalCollateralUsd) * 100 : 0;
   const weightedMaxLtvPct = weightedMaxLtvBps / 100;
@@ -309,6 +343,14 @@ export function CantonBorrow() {
     }
     if (!lendingService?.contractId) {
       setTxError("Canton lending service is unavailable.");
+      return;
+    }
+
+    // Fix 3: Block unsupported collateral types before submitting to DAML
+    const selectedCollateralType = COLLATERAL_META[collateralAsset].collateralType;
+    if (lendingService.configs && !lendingService.configs[selectedCollateralType]) {
+      const supported = Object.keys(lendingService.configs).join(", ") || "none";
+      setTxError(`Collateral type "${selectedCollateralType}" is not supported by the lending service. Supported: ${supported}.`);
       return;
     }
 
@@ -434,7 +476,7 @@ export function CantonBorrow() {
           }
 
           const afterSplit = await fetchFreshBalances(activeParty);
-          const splitTokens = afterSplit.tokens || [];
+          const splitTokens = (afterSplit.tokens || []).filter((t) => t.template === "CantonMUSD");
           const exact = splitTokens.find(
             (token) => Math.abs(parseFloat(token.amount || "0") - targetRepayAmount) < 0.000001
           );
@@ -629,6 +671,12 @@ export function CantonBorrow() {
         </div>
       )}
 
+      {hasDustDebt && (
+        <div className="rounded-xl border border-gray-500/20 bg-gray-500/5 p-3">
+          <p className="text-sm text-gray-400">Dust debt detected ({rawOutstandingDebt.toFixed(10)} mUSD); use repay max to clear.</p>
+        </div>
+      )}
+
       <div className="grid gap-8 lg:grid-cols-2">
         <div>
           <div className="card-gradient-border overflow-hidden">
@@ -690,7 +738,7 @@ export function CantonBorrow() {
                       value={collateralAsset}
                       onChange={(e) => setCollateralAsset(e.target.value as CollateralAsset)}
                     >
-                      {(Object.keys(COLLATERAL_META) as CollateralAsset[]).map((asset) => {
+                      {supportedCollateralAssets.map((asset) => {
                         const info = collateralInfos.find((row) => row.key === asset);
                         const contractCount = getAssetContracts(asset, data).length;
                         return (
@@ -1054,9 +1102,16 @@ export function CantonBorrow() {
               </div>
               <div>
                 <h2 className="text-lg font-semibold text-white">Collateral Positions</h2>
-                <p className="text-sm text-gray-400">{collateralInfos.length} supported tokens</p>
+                <p className="text-sm text-gray-400">
+                  {supportedCollateralInfos.length} supported token{supportedCollateralInfos.length !== 1 ? "s" : ""}
+                </p>
               </div>
             </div>
+            {supportedCollateralAssets.length < Object.keys(COLLATERAL_META).length && (
+              <p className="mb-3 text-xs text-amber-400/80">
+                Current lending service supports: {supportedCollateralAssets.map((a) => COLLATERAL_META[a].symbol).join(", ")} only.
+              </p>
+            )}
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -1070,7 +1125,7 @@ export function CantonBorrow() {
                   </tr>
                 </thead>
                 <tbody>
-                  {collateralInfos.map((collateral) => (
+                  {supportedCollateralInfos.map((collateral) => (
                     <tr key={collateral.key} className="border-b border-white/5 transition-colors hover:bg-white/[0.02]">
                       <td className="py-3">
                         <div className="flex items-center gap-2">
