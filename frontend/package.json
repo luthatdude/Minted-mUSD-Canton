@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test:cip56-faucet": "bash scripts/test-cip56-faucet.sh"
+    "test:cip56-faucet": "bash scripts/test-cip56-faucet.sh",
+    "test:pool-reserved-cid": "npx ts-node --skip-project scripts/test-pool-reserved-cid.ts"
   },
   "dependencies": {
     "@fivenorth/loop-sdk": "^0.7.6",
