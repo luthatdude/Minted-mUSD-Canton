@@ -32,7 +32,7 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 import { ethers } from "ethers";
-import { CantonClient, CantonApiError, ActiveContract, TEMPLATES, CIP56_INTERFACES } from "./canton-client";
+import { CantonClient, CantonApiError, ActiveContract, TEMPLATES, CIP56_INTERFACES, parseTemplateId } from "./canton-client";
 import { formatKMSSignature, sortSignaturesBySignerAddress } from "./signer";
 import { validateCreatePayload, validateExerciseArgs, DamlValidationError } from "./daml-schema-validator";
 // Use shared readSecret utility
@@ -4269,9 +4269,17 @@ class RelayService {
           console.log(`[Relay] ✅ Deposited ${ethers.formatUnits(amountUsdc, 6)} USDC to Treasury (tx: ${depositTx.hash})`);
         }
 
-        // Step 3: Mark BridgeOutRequest as completed on Canton
+        // Step 3: Mark BridgeOutRequest as completed on Canton.
+        // Use the contract's concrete package ID to avoid mixed-package drift
+        // (e.g. legacy eff3... requests while relay default package is f948...).
+        let bridgeOutTemplate = TEMPLATES.StandaloneBridgeOutRequest;
+        try {
+          bridgeOutTemplate = parseTemplateId(req.templateId);
+        } catch {
+          // Fall back to default template mapping when parsing fails.
+        }
         await this.canton.exerciseChoice(
-          TEMPLATES.StandaloneBridgeOutRequest,
+          bridgeOutTemplate,
           contractId,
           "BridgeOut_Complete",
           { relayParty: this.config.cantonParty }

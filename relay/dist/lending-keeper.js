@@ -31,7 +31,7 @@ const price_oracle_1 = require("./price-oracle");
 (0, utils_1.enforceTLSSecurity)();
 const DEFAULT_CONFIG = {
     cantonHost: process.env.CANTON_HOST || "localhost",
-    cantonPort: parseInt(process.env.CANTON_PORT || "6865", 10),
+    cantonPort: parseInt(process.env.CANTON_PORT || "7575", 10),
     cantonToken: (0, utils_1.readSecret)("canton_token", "CANTON_TOKEN"),
     cantonParty: process.env.CANTON_PARTY || "",
     keeperParty: process.env.KEEPER_PARTY || "",

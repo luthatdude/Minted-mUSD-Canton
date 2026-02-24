@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "timestamp": "2026-02-24T06:15:27.886Z",
+  "processedAttestations": [],
+  "processedBridgeOuts": [
+    "0x92dc349937177b56a2eaecdd2f620f26460783c1640dd62ee7db4f0544d80466",
+    "0x46387d89b1c8d0b664288aca4f5d011f13d884e24d337d5443e9ed8df32f450c",
+    "0x9d63ec8b5921cac575844b97892e0172c10b0f37e1a8e2a50d4733cf67abecb6",
+    "0x0249bb6eb34f5a1e4a7bbc6914f243913e9f9ecc175a5571867f822b9db66bbe",
+    "0x4138539d3a4ea69ac455753bdbf97b02a64e55c1797372a30c238b74c1a11d0e",
+    "0x12690e3c2f1c7d37ad7d6ae7a99bd5fbc5088ed4fe7ec32e6fcea9c8ae8c52e2",
+    "0x134c69e45b9052f8876d41c42a56cca2115b02c18ded13c6afccfa1ba08bd6f6",
+    "0xf7e299f5ea467e743284a59ebc20fd7155a0c6d75afd32561012d2c55e7d641b"
+  ],
+  "processedYieldEpochs": [],
+  "processedETHPoolYieldEpochs": [],
+  "processedRedemptionRequests": [],
+  "lastScannedBlock": 10325275,
+  "lastYieldScannedBlock": 0,
+  "lastETHPoolYieldScannedBlock": 0
+}

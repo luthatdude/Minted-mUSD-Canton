@@ -25,13 +25,34 @@ const CANTON_PARTY =
 const RECIPIENT_ALIAS_MAP_RAW = process.env.CANTON_RECIPIENT_PARTY_ALIASES || "";
 const CANTON_PARTY_PATTERN = /^[A-Za-z0-9._:-]+::1220[0-9a-f]{64}$/i;
 const CANTON_USER = process.env.CANTON_USER || "administrator";
-const PACKAGE_ID =
-  process.env.NEXT_PUBLIC_DAML_PACKAGE_ID ||
-  "0489a86388cc81e3e0bee8dc8f6781229d0e01451c1f2d19deea594255e5993b";
+const PACKAGE_ID_RAW =
+  (process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || process.env.CANTON_PACKAGE_ID || "").trim();
+const PACKAGE_ID_VALID = /^[0-9a-f]{64}$/i.test(PACKAGE_ID_RAW);
+const PACKAGE_ID = PACKAGE_ID_RAW;
 const CIP56_PACKAGE_ID =
-  process.env.NEXT_PUBLIC_CIP56_PACKAGE_ID || "";
+  process.env.NEXT_PUBLIC_CIP56_PACKAGE_ID ||
+  process.env.CIP56_PACKAGE_ID ||
+  "";
 const ALLOW_OPERATOR_FALLBACK =
   (process.env.CANTON_ALLOW_OPERATOR_FALLBACK || "").toLowerCase() === "true";
+const CIP56_PACKAGE_ID_VALID = /^[0-9a-f]{64}$/i.test(CIP56_PACKAGE_ID);
+const CIP56_FAUCET_AGREEMENT_HASH =
+  process.env.CIP56_FAUCET_AGREEMENT_HASH ||
+  process.env.NEXT_PUBLIC_CIP56_FAUCET_AGREEMENT_HASH ||
+  "";
+const CIP56_FAUCET_AGREEMENT_URI =
+  process.env.CIP56_FAUCET_AGREEMENT_URI ||
+  process.env.NEXT_PUBLIC_CIP56_FAUCET_AGREEMENT_URI ||
+  "";
+
+/** Short template names that resolve against CIP56_PACKAGE_ID (not PACKAGE_ID). */
+const CIP56_SHORT_NAMES = new Set([
+  "CIP56MintedMUSD",
+  "MUSDTransferFactory",
+  "MUSDTransferInstruction",
+  "MUSDAllocationFactory",
+  "MUSDAllocation",
+]);
 
 /**
  * Map short template names to fully-qualified Canton template IDs.
@@ -128,7 +149,7 @@ function shouldOperatorCosignCreate(
   // include both the owner and the issuer so the Canton ledger accepts the
   // multi-signatory create.
   const entityName = resolvedTemplateId.split(":").pop() || "";
-  const faucetEntities = new Set(["CantonCoin", "CantonUSDC", "USDCx", "CantonMUSD"]);
+  const faucetEntities = new Set(["CantonCoin", "CantonUSDC", "USDCx", "CantonMUSD", "CIP56MintedMUSD"]);
   if (!faucetEntities.has(entityName)) return false;
 
   const issuer = typeof payload.issuer === "string" ? payload.issuer : "";
@@ -177,6 +198,27 @@ export default async function handler(
     return res.status(400).json({ error: "Missing templateId" });
   }
 
+  // Fail fast: short template names require the correct package ID for resolution.
+  // CIP-56 short names use CIP56_PACKAGE_ID; all others use PACKAGE_ID.
+  if (!templateId.includes(":")) {
+    if (CIP56_SHORT_NAMES.has(templateId)) {
+      if (!CIP56_PACKAGE_ID_VALID) {
+        return res.status(500).json({
+          success: false,
+          error: "CIP56 package ID not configured (set NEXT_PUBLIC_CIP56_PACKAGE_ID or CIP56_PACKAGE_ID)",
+        });
+      }
+    } else if (templateId in TEMPLATE_MAP) {
+      if (!PACKAGE_ID_VALID) {
+        return res.status(500).json({
+          success: false,
+          error: "CANTON package ID not configured (set NEXT_PUBLIC_DAML_PACKAGE_ID or CANTON_PACKAGE_ID)",
+        });
+      }
+    }
+    // Unknown short names fall through to resolveTemplateId() which returns 400
+  }
+
   let resolvedTemplateId: string;
   try {
     resolvedTemplateId = resolveTemplateId(templateId);
@@ -206,13 +248,43 @@ export default async function handler(
       // Normalize faucet create payloads: ensure issuer = CANTON_PARTY,
       // owner = actAsParty, and default observer lists to [].
       const entityName = resolvedTemplateId.split(":").pop() || "";
-      const faucetEntities = new Set(["CantonCoin", "CantonUSDC", "USDCx", "CantonMUSD"]);
+      const faucetEntities = new Set(["CantonCoin", "CantonUSDC", "USDCx", "CantonMUSD", "CIP56MintedMUSD"]);
       if (faucetEntities.has(entityName)) {
         if (typeof createPayload.issuer === "string") createPayload.issuer = CANTON_PARTY;
         if (typeof createPayload.owner === "string") createPayload.owner = actAsParty;
         // Only default observer lists if already present in payload
         if ("privacyObservers" in createPayload && !Array.isArray(createPayload.privacyObservers)) {
           createPayload.privacyObservers = [];
+        }
+      }
+
+      // CIP-56 faucet normalization: fill agreement fields, default booleans/arrays
+      if (entityName === "CIP56MintedMUSD") {
+        createPayload.issuer = CANTON_PARTY;
+        createPayload.owner = actAsParty;
+        if (createPayload.blacklisted === undefined) createPayload.blacklisted = false;
+        if (!Array.isArray(createPayload.observers)) createPayload.observers = [];
+        // Fill agreement hash/uri from env if not provided in request
+        if (!createPayload.agreementHash && CIP56_FAUCET_AGREEMENT_HASH) {
+          createPayload.agreementHash = CIP56_FAUCET_AGREEMENT_HASH;
+        }
+        if (!createPayload.agreementUri && CIP56_FAUCET_AGREEMENT_URI) {
+          createPayload.agreementUri = CIP56_FAUCET_AGREEMENT_URI;
+        }
+        // Validate agreement fields
+        const hash = String(createPayload.agreementHash || "");
+        const uri = String(createPayload.agreementUri || "");
+        if (!/^[0-9a-f]{64}$/i.test(hash)) {
+          return res.status(400).json({
+            success: false,
+            error: `CIP-56 faucet requires agreementHash (64 hex chars). Set CIP56_FAUCET_AGREEMENT_HASH env var or pass in payload. Got: "${hash.slice(0, 20)}..."`,
+          });
+        }
+        if (!uri.trim()) {
+          return res.status(400).json({
+            success: false,
+            error: "CIP-56 faucet requires agreementUri. Set CIP56_FAUCET_AGREEMENT_URI env var or pass in payload.",
+          });
         }
       }
 

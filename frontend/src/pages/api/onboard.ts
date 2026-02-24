@@ -219,8 +219,12 @@ async function ensureComplianceEntry(
     const activeAtOffset = offsetData.offset || 0;
 
     // Canton 3.4 JSON API v2: use eventFormat with cumulative TemplateFilter
-    const PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID ||
-      "0489a86388cc81e3e0bee8dc8f6781229d0e01451c1f2d19deea594255e5993b";
+    const PACKAGE_ID = (process.env.NEXT_PUBLIC_DAML_PACKAGE_ID ||
+      process.env.CANTON_PACKAGE_ID ||
+      "").trim();
+    if (!/^[0-9a-f]{64}$/i.test(PACKAGE_ID)) {
+      throw new Error("CANTON package ID not configured (set NEXT_PUBLIC_DAML_PACKAGE_ID or CANTON_PACKAGE_ID)");
+    }
     const queryResp = await fetch(`${CANTON_ADMIN_URL}/v2/state/active-contracts?limit=200`, {
       method: "POST",
       headers: {
@@ -278,6 +282,10 @@ async function ensureComplianceEntry(
     throw new Error("No ComplianceRegistry found on Canton");
   } catch (err) {
     console.error("[Onboard] Compliance check failed:", err);
+    // Config errors must surface regardless of NODE_ENV
+    if (err instanceof Error && err.message.includes("CANTON package ID not configured")) {
+      throw err;
+    }
     if (process.env.NODE_ENV !== "production") {
       return `compliance-dev-${Date.now()}`;
     }

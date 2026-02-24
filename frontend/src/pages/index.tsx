@@ -61,6 +61,8 @@ export default function Home() {
           return <CantonBorrow />;
         case "bridge":
           return <CantonBridge />;
+        case "points":
+          return <PointsPage />;
         case "faucet":
           return <DevnetFaucet />;
         case "admin":

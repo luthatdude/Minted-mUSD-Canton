@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:cip56-faucet": "bash scripts/test-cip56-faucet.sh"
   },
   "dependencies": {
     "@fivenorth/loop-sdk": "^0.7.6",

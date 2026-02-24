@@ -26,9 +26,12 @@ const CANTON_PARTY =
 const CANTON_USER = process.env.CANTON_USER || "administrator";
 const PACKAGE_ID =
   process.env.NEXT_PUBLIC_DAML_PACKAGE_ID ||
-  "eff3bf30edb508b2d052f969203db972e59c66e974344ed43016cfccfa618f06";
+  process.env.CANTON_PACKAGE_ID ||
+  "";
 const CIP56_PACKAGE_ID =
-  process.env.NEXT_PUBLIC_CIP56_PACKAGE_ID || "";
+  process.env.NEXT_PUBLIC_CIP56_PACKAGE_ID ||
+  process.env.CIP56_PACKAGE_ID ||
+  "";
 const CANTON_PARTY_PATTERN = /^[A-Za-z0-9._:-]+::1220[0-9a-f]{64}$/i;
 
 // Known V3 packages for operator inventory discovery
@@ -206,7 +209,28 @@ export default async function handler(
       return res.status(200).json(existing);
     }
 
-    // 5. Query operator's CantonMUSD inventory
+    // 5. Discover pool-reserved CIDs to exclude from inventory selection.
+    //    The staking service (CantonStakingService) holds a poolMusdCid that
+    //    must never be consumed by conversion swaps.
+    const reservedCids = new Set<string>();
+    for (const pkg of V3_PACKAGE_IDS) {
+      try {
+        const svcs = await queryActiveContracts(
+          operatorParty, offset, `${pkg}:CantonSMUSD:CantonStakingService`
+        );
+        for (const s of svcs) {
+          const poolCid = s.createArgument.poolMusdCid;
+          if (typeof poolCid === "string" && poolCid.length > 0) {
+            reservedCids.add(poolCid);
+          }
+        }
+      } catch { /* staking service may not exist for all packages */ }
+    }
+    if (reservedCids.size > 0) {
+      console.log(`[canton-convert] Excluding ${reservedCids.size} pool-reserved CID(s) from inventory`);
+    }
+
+    // 5b. Query operator's CantonMUSD inventory (excluding reserved pool CIDs)
     const operatorMusd: Array<{
       contractId: string;
       templateId: string;
@@ -221,7 +245,8 @@ export default async function handler(
       const contracts = await queryActiveContracts(operatorParty, offset, tplId);
       for (const c of contracts) {
         if ((c.createArgument.owner as string) === operatorParty &&
-            (c.createArgument.issuer as string) === operatorParty) {
+            (c.createArgument.issuer as string) === operatorParty &&
+            !reservedCids.has(c.contractId)) {
           operatorMusd.push({
             contractId: c.contractId,
             templateId: c.templateId,

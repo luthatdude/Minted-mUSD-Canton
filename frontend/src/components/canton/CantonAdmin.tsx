@@ -20,6 +20,11 @@ const CANTON_OPERATOR_PARTY =
   process.env.NEXT_PUBLIC_CANTON_OPERATOR_PARTY ||
   "sv::122006df00c631440327e68ba87f61795bbcd67db26142e580137e5038649f22edce";
 
+const CIP56_PACKAGE_ID = process.env.NEXT_PUBLIC_CIP56_PACKAGE_ID || "";
+const CIP56_FAUCET_AGREEMENT_HASH = process.env.NEXT_PUBLIC_CIP56_FAUCET_AGREEMENT_HASH || "";
+const CIP56_FAUCET_AGREEMENT_URI = process.env.NEXT_PUBLIC_CIP56_FAUCET_AGREEMENT_URI || "";
+const CIP56_CONFIGURED = Boolean(CIP56_PACKAGE_ID && CIP56_FAUCET_AGREEMENT_HASH && CIP56_FAUCET_AGREEMENT_URI);
+
 const CANTON_FAUCET_TEMPLATES = {
   CantonUSDC: `${PACKAGE_ID}:CantonDirectMint:CantonUSDC`,
   USDCx: `${PACKAGE_ID}:CantonDirectMint:USDCx`,
@@ -56,6 +61,7 @@ export function CantonAdmin() {
   const [swapAmount, setSwapAmount] = useState("");
   const [faucetLoadingKey, setFaucetLoadingKey] = useState<string | null>(null);
   const [faucetAmount, setFaucetAmount] = useState("1000");
+  const [cip56FaucetAmount, setCip56FaucetAmount] = useState("1000");
 
   const loadContracts = useCallback(async () => {
     if (!loopWallet.isConnected) return;
@@ -117,6 +123,42 @@ export function CantonAdmin() {
       setResult(`Minted ${trimmed} ${token} to ${party.split("::")[0]}.`);
     } catch (err: any) {
       setError(err?.message || "Canton faucet mint failed");
+    } finally {
+      setFaucetLoadingKey(null);
+    }
+  }
+
+  async function handleCip56FaucetMint(amount: string) {
+    const party = activeParty;
+    const trimmed = amount.trim();
+    const numeric = Number(trimmed);
+    if (!party) {
+      setError("Connect your Loop wallet party first.");
+      return;
+    }
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      setError("Enter a valid faucet amount.");
+      return;
+    }
+    setFaucetLoadingKey("CIP56MintedMUSD");
+    setError(null);
+    setResult(null);
+    try {
+      const payload: Record<string, unknown> = {
+        issuer: CANTON_OPERATOR_PARTY,
+        owner: party,
+        amount: trimmed,
+        blacklisted: false,
+        observers: [],
+        agreementHash: CIP56_FAUCET_AGREEMENT_HASH,
+        agreementUri: CIP56_FAUCET_AGREEMENT_URI,
+      };
+      const resp = await cantonCreate("CIP56MintedMUSD", payload, { party });
+      if (!resp.success) throw new Error(resp.error || "CIP-56 faucet mint failed");
+      await Promise.all([refreshBalances(), loadContracts()]);
+      setResult(`Minted ${trimmed} CIP-56 mUSD to ${party.split("::")[0]}.`);
+    } catch (err: any) {
+      setError(err?.message || "CIP-56 faucet mint failed");
     } finally {
       setFaucetLoadingKey(null);
     }
@@ -450,6 +492,25 @@ export function CantonAdmin() {
                 Mint CTN
               </TxButton>
             </div>
+          </div>
+
+          <div className="mt-4 card">
+            <h3 className="mb-2 font-semibold text-gray-200">CIP-56 mUSD (Primary Standard)</h3>
+            <p className="text-xs text-gray-400 mb-2">Canton Network standard mUSD token for transfers and settlement.</p>
+            <input className="input" type="number" value={cip56FaucetAmount} onChange={(e) => setCip56FaucetAmount(e.target.value)} />
+            <TxButton
+              onClick={() => handleCip56FaucetMint(cip56FaucetAmount)}
+              loading={faucetLoadingKey === "CIP56MintedMUSD"}
+              disabled={Boolean(faucetLoadingKey) || !CIP56_CONFIGURED}
+              className="mt-3 w-full"
+            >
+              Mint CIP-56 mUSD
+            </TxButton>
+            {!CIP56_CONFIGURED && (
+              <p className="mt-2 text-xs text-yellow-400">
+                Requires: NEXT_PUBLIC_CIP56_PACKAGE_ID, NEXT_PUBLIC_CIP56_FAUCET_AGREEMENT_HASH, NEXT_PUBLIC_CIP56_FAUCET_AGREEMENT_URI
+              </p>
+            )}
           </div>
         </Section>
       )}

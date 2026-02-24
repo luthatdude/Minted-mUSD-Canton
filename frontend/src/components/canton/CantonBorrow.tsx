@@ -443,10 +443,22 @@ export function CantonBorrow() {
         const redeemableTotal = repayTokens.reduce((s, t) => s + parseFloat(t.amount || "0"), 0);
         const cip56Total = parseFloat(fresh.cip56Balance || "0");
         // Auto-convert CIP-56 if redeemable insufficient
+        // (Repay currently requires legacy CantonMUSD CIDs per DAML service typing)
         if (redeemableTotal < targetRepayAmount && cip56Total > 0 && redeemableTotal + cip56Total >= targetRepayAmount) {
           const convertNeeded = targetRepayAmount - redeemableTotal;
           const convResult = await convertCip56ToRedeemable(activeParty, convertNeeded);
-          if (!convResult.success) throw new Error(`CIP-56 conversion failed: ${convResult.error}`);
+          if (!convResult.success) {
+            const rawErr = convResult.error || "";
+            if (rawErr.includes("Insufficient operator inventory") || rawErr.includes("inventoryAvailable")) {
+              const match = rawErr.match(/have ([\d.]+) redeemable, need ([\d.]+)/);
+              const available = match ? match[1] : "0";
+              throw new Error(`Conversion inventory low: only ${available} redeemable mUSD available. Try a smaller repayment.`);
+            }
+            if (rawErr.includes("WRONGLY_TYPED_CONTRACT") || rawErr.includes("type mismatch")) {
+              throw new Error("Conversion unavailable: operator inventory token mismatch. Contact support.");
+            }
+            throw new Error(`Auto-conversion failed: ${rawErr}`);
+          }
           const refreshed = await fetchFreshBalances(activeParty);
           repayTokens = (refreshed.tokens || []).filter((t) => t.template === "CantonMUSD");
         }
@@ -856,6 +868,12 @@ export function CantonBorrow() {
                     Escrow routing is automatic. Withdrawals use an active escrow for the selected collateral type.
                   </p>
                 </>
+              )}
+
+              {action === "repay" && parseFloat(data?.cip56Balance || "0") > 0 && (
+                <p className="text-xs text-blue-400">
+                  Repay currently requires legacy CantonMUSD. CIP-56 mUSD is auto-converted when needed.
+                </p>
               )}
 
               <TxButton

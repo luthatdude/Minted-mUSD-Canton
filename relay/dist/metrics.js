@@ -36,7 +36,7 @@ var __importStar = (this && this.__importStar) || function (mod) {
     return result;
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.startMetricsServer = exports.metricsHandler = exports.rpcLatency = exports.yieldDistributionDuration = exports.attestationDuration = exports.anomalyConsecutiveReverts = exports.activeProviderIndex = exports.hwmDesyncFlagged = exports.heapUsedBytes = exports.uptimeSeconds = exports.inFlightAttestations = exports.rateLimiterTxPerHour = exports.rateLimiterTxPerMinute = exports.anomalyPauseTriggered = exports.consecutiveFailures = exports.lastScannedBlock = exports.nonceCollisionsTotal = exports.txRevertsTotal = exports.validatorRateLimitHitsTotal = exports.bridgeValidationFailuresTotal = exports.yieldDistributionsTotal = exports.bridgeOutsTotal = exports.attestationsProcessedTotal = exports.register = void 0;
+exports.startMetricsServer = exports.metricsHandler = exports.rpcLatency = exports.yieldDistributionDuration = exports.attestationDuration = exports.cantonApiDuration = exports.orphanRecoveryTotal = exports.cantonApiRetriesTotal = exports.cantonApiErrorsTotal = exports.directionConsecutiveFailures = exports.directionStatus = exports.anomalyConsecutiveReverts = exports.activeProviderIndex = exports.hwmDesyncFlagged = exports.heapUsedBytes = exports.uptimeSeconds = exports.inFlightAttestations = exports.rateLimiterTxPerHour = exports.rateLimiterTxPerMinute = exports.anomalyPauseTriggered = exports.consecutiveFailures = exports.lastScannedBlock = exports.nonceCollisionsTotal = exports.txRevertsTotal = exports.validatorRateLimitHitsTotal = exports.bridgeValidationFailuresTotal = exports.yieldDistributionsTotal = exports.bridgeOutsTotal = exports.attestationsProcessedTotal = exports.register = void 0;
 const prom_client_1 = __importStar(require("prom-client"));
 const http = __importStar(require("http"));
 // ============================================================
@@ -169,6 +169,59 @@ exports.activeProviderIndex = new prom_client_1.Gauge({
 exports.anomalyConsecutiveReverts = new prom_client_1.Gauge({
     name: "minted_anomaly_consecutive_reverts",
     help: "Anomaly detector consecutive revert count",
+    registers: [exports.register],
+});
+// ============================================================
+//  BRIDGE HARDENING — Per-direction & Canton API observability
+// ============================================================
+/**
+ * Per-direction health status gauge.
+ *   direction: "attestations" | "bridge_out_watcher" | "canton_bridge_outs" | "yield_bridge_in" | "ethpool_yield_bridge_in"
+ *   Values: 0 = ok, 1 = degraded (retryable errors), 2 = failed (permanent error)
+ */
+exports.directionStatus = new prom_client_1.Gauge({
+    name: "minted_relay_direction_status",
+    help: "Health status of each relay direction (0=ok, 1=degraded, 2=failed)",
+    labelNames: ["direction"],
+    registers: [exports.register],
+});
+/** Per-direction consecutive failure count. */
+exports.directionConsecutiveFailures = new prom_client_1.Gauge({
+    name: "minted_relay_direction_consecutive_failures",
+    help: "Consecutive failures for each relay direction",
+    labelNames: ["direction"],
+    registers: [exports.register],
+});
+/**
+ * Canton API errors by HTTP status code and endpoint.
+ * Enables alerting on 413 (payload too large), 429 (rate limit), 503 (unavailable).
+ */
+exports.cantonApiErrorsTotal = new prom_client_1.Counter({
+    name: "minted_canton_api_errors_total",
+    help: "Canton API errors by status code and path",
+    labelNames: ["status", "path"],
+    registers: [exports.register],
+});
+/** Canton API retry attempts. */
+exports.cantonApiRetriesTotal = new prom_client_1.Counter({
+    name: "minted_canton_api_retries_total",
+    help: "Canton API retry attempts by status code and path",
+    labelNames: ["status", "path"],
+    registers: [exports.register],
+});
+/** Orphan CantonMUSD recovery attempts. */
+exports.orphanRecoveryTotal = new prom_client_1.Counter({
+    name: "minted_orphan_recovery_total",
+    help: "Orphan CantonMUSD recovery attempts",
+    labelNames: ["status"], // success | error | skipped
+    registers: [exports.register],
+});
+/** Canton API call duration (seconds). */
+exports.cantonApiDuration = new prom_client_1.Histogram({
+    name: "minted_canton_api_duration_seconds",
+    help: "Canton API call duration",
+    labelNames: ["method", "path"],
+    buckets: [0.1, 0.25, 0.5, 1, 2, 5, 10, 30],
     registers: [exports.register],
 });
 // ============================================================

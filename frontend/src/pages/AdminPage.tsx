@@ -19,6 +19,14 @@ const CANTON_PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || "";
 const CANTON_OPERATOR_PARTY =
   process.env.NEXT_PUBLIC_CANTON_OPERATOR_PARTY ||
   "sv::122006df00c631440327e68ba87f61795bbcd67db26142e580137e5038649f22edce";
+const CIP56_FAUCET_AGREEMENT_HASH = process.env.NEXT_PUBLIC_CIP56_FAUCET_AGREEMENT_HASH || "";
+const CIP56_FAUCET_AGREEMENT_URI = process.env.NEXT_PUBLIC_CIP56_FAUCET_AGREEMENT_URI || "";
+const CIP56_CONFIGURED = Boolean(
+  (process.env.NEXT_PUBLIC_CIP56_PACKAGE_ID || "") &&
+  CIP56_FAUCET_AGREEMENT_HASH &&
+  CIP56_FAUCET_AGREEMENT_URI
+);
+
 const CANTON_FAUCET_TEMPLATES = {
   CantonUSDC: `${CANTON_PACKAGE_ID}:CantonDirectMint:CantonUSDC`,
   USDCx: `${CANTON_PACKAGE_ID}:CantonDirectMint:USDCx`,
@@ -279,6 +287,7 @@ export function AdminPage() {
   const [cantonUsdcAmount, setCantonUsdcAmount] = useState("10000");
   const [cantonUsdcxAmount, setCantonUsdcxAmount] = useState("10000");
   const [cantonCoinAmount, setCantonCoinAmount] = useState("1000");
+  const [cip56MusdAmount, setCip56MusdAmount] = useState("1000");
   const [ethUsdcAmount, setEthUsdcAmount] = useState("10000");
   const [ethUsdtAmount, setEthUsdtAmount] = useState("10000");
   const [ethMusdAmount, setEthMusdAmount] = useState("1000");
@@ -484,6 +493,43 @@ export function AdminPage() {
       setFaucetStatus({ success: `Minted ${trimmedAmount} ${token} on Canton.` });
     } catch (err: any) {
       setFaucetStatus({ error: err.message || "Canton faucet mint failed." });
+    } finally {
+      setFaucetLoadingKey(null);
+    }
+  }
+
+  async function mintCip56MusdFaucet(amount: string) {
+    const trimmedAmount = amount.trim();
+    const numericAmount = Number(trimmedAmount);
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+      setFaucetStatus({ error: "Enter a valid CIP-56 faucet amount." });
+      return;
+    }
+    const party = activeParty;
+    if (!party) {
+      setFaucetStatus({ error: "Connect your Loop wallet party before using the CIP-56 faucet." });
+      return;
+    }
+    setFaucetLoadingKey("canton-CIP56");
+    setFaucetStatus({});
+    try {
+      const payload: Record<string, unknown> = {
+        issuer: CANTON_OPERATOR_PARTY,
+        owner: party,
+        amount: trimmedAmount,
+        blacklisted: false,
+        observers: [],
+        agreementHash: CIP56_FAUCET_AGREEMENT_HASH,
+        agreementUri: CIP56_FAUCET_AGREEMENT_URI,
+      };
+      const response = await cantonCreate("CIP56MintedMUSD", payload, { party });
+      if (!response.success) {
+        throw new Error(response.error || "CIP-56 faucet command failed");
+      }
+      await refreshCantonData();
+      setFaucetStatus({ success: `Minted ${trimmedAmount} CIP-56 mUSD on Canton.` });
+    } catch (err: any) {
+      setFaucetStatus({ error: err.message || "CIP-56 faucet mint failed." });
     } finally {
       setFaucetLoadingKey(null);
     }
@@ -1548,6 +1594,28 @@ export function AdminPage() {
                   Mint Canton Coin
                 </TxButton>
               </div>
+            </div>
+          </div>
+
+          <div className="card">
+            <h3 className="mb-3 font-semibold text-gray-300">CIP-56 mUSD Faucet (Primary Standard)</h3>
+            <p className="mb-2 text-xs text-gray-400">Canton Network standard mUSD token for transfers and settlement.</p>
+            <div>
+              <label className="label">Amount</label>
+              <input className="input" type="number" value={cip56MusdAmount} onChange={(e) => setCip56MusdAmount(e.target.value)} />
+              <TxButton
+                className="mt-2 w-full"
+                onClick={() => mintCip56MusdFaucet(cip56MusdAmount)}
+                loading={faucetLoadingKey === "canton-CIP56"}
+                disabled={faucetLoadingKey !== null || !CIP56_CONFIGURED}
+              >
+                Mint CIP-56 mUSD
+              </TxButton>
+              {!CIP56_CONFIGURED && (
+                <p className="mt-2 text-xs text-yellow-400">
+                  Requires: NEXT_PUBLIC_CIP56_PACKAGE_ID, NEXT_PUBLIC_CIP56_FAUCET_AGREEMENT_HASH, NEXT_PUBLIC_CIP56_FAUCET_AGREEMENT_URI
+                </p>
+              )}
             </div>
           </div>
 

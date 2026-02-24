@@ -18,9 +18,18 @@ const CANTON_PARTY =
 const CANTON_USER = process.env.CANTON_USER || "administrator";
 const PACKAGE_ID =
   process.env.NEXT_PUBLIC_DAML_PACKAGE_ID ||
-  "0489a86388cc81e3e0bee8dc8f6781229d0e01451c1f2d19deea594255e5993b";
+  process.env.CANTON_PACKAGE_ID ||
+  "";
 
-const PRICE_FEED_TEMPLATE = `${PACKAGE_ID}:CantonLending:CantonPriceFeed`;
+// Known V3 packages for fan-out discovery
+const V3_PACKAGE_IDS: string[] = Array.from(new Set([
+  PACKAGE_ID,
+  process.env.CANTON_PACKAGE_ID,
+  "eff3bf30edb508b2d052f969203db972e59c66e974344ed43016cfccfa618f06",
+  "f9481d29611628c7145d3d9a856aed6bb318d7fdd371a0262dbac7ca22b0142b",
+].filter((id): id is string => typeof id === "string" && id.length === 64)));
+
+const PRICE_FEED_TEMPLATES = V3_PACKAGE_IDS.map((pkg) => `${pkg}:CantonLending:CantonPriceFeed`);
 
 async function cantonRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
   const resp = await fetch(`${CANTON_BASE_URL}${path}`, {
@@ -41,6 +50,7 @@ async function cantonRequest<T>(method: string, path: string, body?: unknown): P
 
 interface PriceFeedContract {
   contractId: string;
+  templateId: string;
   symbol: string;
   priceUsd: string;
   lastUpdated: string;
@@ -61,38 +71,50 @@ async function getActivePriceFeeds(): Promise<PriceFeedContract[]> {
     };
   };
 
-  const raw = await cantonRequest<unknown>("POST", "/v2/state/active-contracts?limit=200", {
-    eventFormat: {
-      filtersByParty: {
-        [CANTON_PARTY]: {
-          cumulative: [
-            {
-              identifierFilter: {
-                TemplateFilter: {
-                  value: {
-                    templateId: PRICE_FEED_TEMPLATE,
-                    includeCreatedEventBlob: false,
+  // Fan out across all known V3 packages to find price feeds
+  const allEntries: RawEntry[] = [];
+  for (const tpl of PRICE_FEED_TEMPLATES) {
+    try {
+      const raw = await cantonRequest<unknown>("POST", "/v2/state/active-contracts?limit=200", {
+        eventFormat: {
+          filtersByParty: {
+            [CANTON_PARTY]: {
+              cumulative: [
+                {
+                  identifierFilter: {
+                    TemplateFilter: {
+                      value: {
+                        templateId: tpl,
+                        includeCreatedEventBlob: false,
+                      },
+                    },
                   },
                 },
-              },
+              ],
             },
-          ],
+          },
+          verbose: true,
         },
-      },
-      verbose: true,
-    },
-    activeAtOffset: offset,
-  });
-
-  // Normalize: response may be array or { result: [...] }
-  let entries: RawEntry[];
-  if (Array.isArray(raw)) {
-    entries = raw;
-  } else if (raw && typeof raw === "object" && Array.isArray((raw as any).result)) {
-    entries = (raw as any).result;
-  } else {
-    entries = [];
+        activeAtOffset: offset,
+      });
+      let entries: RawEntry[];
+      if (Array.isArray(raw)) {
+        entries = raw;
+      } else if (raw && typeof raw === "object" && Array.isArray((raw as any).result)) {
+        entries = (raw as any).result;
+      } else {
+        entries = [];
+      }
+      allEntries.push(...entries);
+    } catch {
+      // Template may not exist under this package — skip
+    }
   }
+
+  // Deduplicate by contractId
+  const entries = Array.from(
+    new Map(allEntries.map((e) => [e.contractEntry?.JsActiveContract?.createdEvent?.contractId, e])).values()
+  );
 
   const feeds: PriceFeedContract[] = [];
   for (const entry of entries) {
@@ -103,6 +125,7 @@ async function getActivePriceFeeds(): Promise<PriceFeedContract[]> {
     const p = evt.createArgument;
     feeds.push({
       contractId: evt.contractId,
+      templateId: evt.templateId,
       symbol: (p.symbol as string) || "",
       priceUsd: (p.priceUsd as string) || "0",
       lastUpdated: (p.lastUpdated as string) || "",
@@ -143,7 +166,7 @@ export default async function handler(
           commands: [
             {
               ExerciseCommand: {
-                templateId: PRICE_FEED_TEMPLATE,
+                templateId: feed.templateId,
                 contractId: feed.contractId,
                 choice: "PriceFeed_Update",
                 choiceArgument: {

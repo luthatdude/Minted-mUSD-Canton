@@ -11,9 +11,13 @@ import { CONTRACTS, USDC_DECIMALS, CHAIN_ID } from "@/lib/config";
 import { formatToken } from "@/lib/format";
 
 const PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || "";
+const CIP56_PACKAGE_ID = process.env.NEXT_PUBLIC_CIP56_PACKAGE_ID || "";
 const CANTON_OPERATOR_PARTY =
   process.env.NEXT_PUBLIC_CANTON_OPERATOR_PARTY ||
   "sv::122006df00c631440327e68ba87f61795bbcd67db26142e580137e5038649f22edce";
+const CIP56_FAUCET_AGREEMENT_HASH = process.env.NEXT_PUBLIC_CIP56_FAUCET_AGREEMENT_HASH || "";
+const CIP56_FAUCET_AGREEMENT_URI = process.env.NEXT_PUBLIC_CIP56_FAUCET_AGREEMENT_URI || "";
+const CIP56_CONFIGURED = Boolean(CIP56_PACKAGE_ID && CIP56_FAUCET_AGREEMENT_HASH && CIP56_FAUCET_AGREEMENT_URI);
 
 /** Fully-qualified DAML template IDs */
 const CANTON_TEMPLATES = {
@@ -57,7 +61,8 @@ export function DevnetFaucet() {
     USDCx: "10000",
     CantonCoin: "1000",
   });
-  const [mintingToken, setMintingToken] = useState<TokenType | "evm-usdc" | null>(null);
+  const [cip56Amount, setCip56Amount] = useState("1000");
+  const [mintingToken, setMintingToken] = useState<TokenType | "evm-usdc" | "cip56-musd" | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [evmUsdcBal, setEvmUsdcBal] = useState<bigint | null>(null);
@@ -140,6 +145,38 @@ export function DevnetFaucet() {
       const newBal = await contracts.usdc.balanceOf(address);
       setEvmUsdcBal(newBal);
       setResult("✅ Minted 10,000 Test USDC on Sepolia (EVM)");
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setMintingToken(null);
+    }
+  }
+
+  async function handleCip56Mint() {
+    const amt = cip56Amount;
+    if (!amt || parseFloat(amt) <= 0 || !party) return;
+
+    setMintingToken("cip56-musd");
+    setError(null);
+    setResult(null);
+
+    try {
+      // Use short name — API resolves via TEMPLATE_MAP and normalizes payload
+      const payload: Record<string, unknown> = {
+        issuer: CANTON_OPERATOR_PARTY,
+        owner: party,
+        amount: amt,
+        blacklisted: false,
+        observers: [],
+        agreementHash: CIP56_FAUCET_AGREEMENT_HASH,
+        agreementUri: CIP56_FAUCET_AGREEMENT_URI,
+      };
+
+      const resp = await cantonCreate("CIP56MintedMUSD", payload, { party });
+      if (!resp.success) throw new Error(resp.error || "CIP-56 faucet create failed");
+
+      setResult(`Minted ${amt} CIP-56 mUSD on Canton`);
+      await refresh();
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -281,6 +318,69 @@ export function DevnetFaucet() {
               </div>
             );
           })}
+        </div>
+      </div>
+
+      {/* CIP-56 mUSD Faucet */}
+      <div className="space-y-4">
+        <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+          <svg className="h-5 w-5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+          </svg>
+          CIP-56 mUSD (Primary Standard)
+        </h3>
+
+        <div className="card-gradient-border overflow-hidden">
+          <div className="flex items-center gap-4 p-5">
+            <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-green-500 to-emerald-600">
+              <svg className="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+              </svg>
+            </div>
+            <div className="flex-1">
+              <h4 className="font-semibold text-white">CIP-56 mUSD</h4>
+              <p className="text-xs text-gray-400">
+                Canton Network standard token. Primary balance for transfers and settlement.
+              </p>
+              {data && (
+                <p className="text-xs text-emerald-400 mt-1">
+                  Balance: {parseFloat(data.cip56Balance || "0").toLocaleString(undefined, { maximumFractionDigits: 2 })} mUSD
+                </p>
+              )}
+            </div>
+            <div className="flex items-center gap-3">
+              <input
+                type="number"
+                className="w-32 rounded-lg border border-white/10 bg-surface-800/50 px-3 py-2 text-right text-sm font-semibold text-white placeholder-gray-600 focus:border-green-500/50 focus:outline-none"
+                value={cip56Amount}
+                onChange={(e) => setCip56Amount(e.target.value)}
+                placeholder="1000"
+              />
+              <button
+                className="rounded-lg bg-gradient-to-r from-green-500 to-emerald-600 px-5 py-2 text-sm font-semibold text-white transition-all hover:shadow-lg disabled:opacity-50"
+                onClick={handleCip56Mint}
+                disabled={!party || mintingToken !== null || !CIP56_CONFIGURED}
+                title={!CIP56_CONFIGURED ? "Set NEXT_PUBLIC_CIP56_PACKAGE_ID, NEXT_PUBLIC_CIP56_FAUCET_AGREEMENT_HASH, and NEXT_PUBLIC_CIP56_FAUCET_AGREEMENT_URI" : ""}
+              >
+                {mintingToken === "cip56-musd" ? (
+                  <span className="flex items-center gap-2">
+                    <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Minting...
+                  </span>
+                ) : (
+                  "Mint CIP-56"
+                )}
+              </button>
+            </div>
+          </div>
+          {!CIP56_CONFIGURED && (
+            <div className="border-t border-white/5 bg-yellow-500/5 px-5 py-3 text-xs text-yellow-400">
+              CIP-56 faucet requires env config: NEXT_PUBLIC_CIP56_PACKAGE_ID, NEXT_PUBLIC_CIP56_FAUCET_AGREEMENT_HASH, NEXT_PUBLIC_CIP56_FAUCET_AGREEMENT_URI
+            </div>
+          )}
         </div>
       </div>
 

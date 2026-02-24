@@ -131,7 +131,7 @@ export function CantonBalancesPage() {
     <div className="space-y-8">
       <PageHeader
         title="Canton mUSD"
-        subtitle="Live CantonMUSD token balances from the Canton Network ledger"
+        subtitle="Live mUSD token balances from the Canton Network ledger"
         badge="Canton"
         badgeColor="emerald"
         action={
@@ -201,8 +201,8 @@ export function CantonBalancesPage() {
 
       {/* Token UTXOs */}
       <Section
-        title="CantonMUSD Tokens"
-        subtitle={`${data.tokenCount} active contracts on the Canton ledger`}
+        title="mUSD Tokens"
+        subtitle={`${data.tokenCount} active contract${data.tokenCount !== 1 ? "s" : ""} on the Canton ledger`}
         icon={
           <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
@@ -268,7 +268,7 @@ export function CantonBalancesPage() {
               {data.tokens.length === 0 && (
                 <tr>
                   <td colSpan={6} className="py-12 text-center text-gray-500">
-                    No CantonMUSD tokens found on the ledger.
+                    No mUSD tokens found on the ledger.
                   </td>
                 </tr>
               )}

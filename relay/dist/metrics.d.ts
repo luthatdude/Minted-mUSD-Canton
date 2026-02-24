@@ -58,6 +58,25 @@ export declare const hwmDesyncFlagged: client.Gauge<string>;
 export declare const activeProviderIndex: client.Gauge<string>;
 /** Anomaly detector consecutive reverts. */
 export declare const anomalyConsecutiveReverts: client.Gauge<string>;
+/**
+ * Per-direction health status gauge.
+ *   direction: "attestations" | "bridge_out_watcher" | "canton_bridge_outs" | "yield_bridge_in" | "ethpool_yield_bridge_in"
+ *   Values: 0 = ok, 1 = degraded (retryable errors), 2 = failed (permanent error)
+ */
+export declare const directionStatus: client.Gauge<"direction">;
+/** Per-direction consecutive failure count. */
+export declare const directionConsecutiveFailures: client.Gauge<"direction">;
+/**
+ * Canton API errors by HTTP status code and endpoint.
+ * Enables alerting on 413 (payload too large), 429 (rate limit), 503 (unavailable).
+ */
+export declare const cantonApiErrorsTotal: client.Counter<"status" | "path">;
+/** Canton API retry attempts. */
+export declare const cantonApiRetriesTotal: client.Counter<"status" | "path">;
+/** Orphan CantonMUSD recovery attempts. */
+export declare const orphanRecoveryTotal: client.Counter<"status">;
+/** Canton API call duration (seconds). */
+export declare const cantonApiDuration: client.Histogram<"method" | "path">;
 /** Attestation processing duration end-to-end (seconds). */
 export declare const attestationDuration: client.Histogram<string>;
 /** Yield distribution transaction duration (seconds). */

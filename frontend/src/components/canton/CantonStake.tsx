@@ -205,10 +205,22 @@ export function CantonStake() {
       const freshRedeemable = freshTokens.reduce((s, t) => s + parseFloat(t.amount || "0"), 0);
       const freshCip56 = parseFloat(fresh.cip56Balance || "0");
       // Auto-convert CIP-56 → redeemable if insufficient redeemable balance
+      // (Stake currently requires legacy CantonMUSD CIDs per DAML service typing)
       if (freshRedeemable < parsedAmount && freshCip56 > 0 && freshRedeemable + freshCip56 >= parsedAmount) {
         const convertNeeded = parsedAmount - freshRedeemable;
         const convResult = await convertCip56ToRedeemable(activeParty, convertNeeded);
-        if (!convResult.success) throw new Error(`CIP-56 conversion failed: ${convResult.error}`);
+        if (!convResult.success) {
+          const rawErr = convResult.error || "";
+          if (rawErr.includes("Insufficient operator inventory") || rawErr.includes("inventoryAvailable")) {
+            const match = rawErr.match(/have ([\d.]+) redeemable, need ([\d.]+)/);
+            const available = match ? match[1] : "0";
+            throw new Error(`Conversion inventory low: only ${available} redeemable mUSD available. Try a smaller amount.`);
+          }
+          if (rawErr.includes("WRONGLY_TYPED_CONTRACT") || rawErr.includes("type mismatch")) {
+            throw new Error("Conversion unavailable: operator inventory token mismatch. Contact support.");
+          }
+          throw new Error(`Auto-conversion failed: ${rawErr}`);
+        }
         const refreshed = await fetchFreshBalances(activeParty);
         freshTokens = (refreshed.tokens || []).filter((t) => t.template === "CantonMUSD");
       }
@@ -653,6 +665,13 @@ export function CantonStake() {
                               <span className="text-gray-300">{fmtAmount(stakingService?.minDeposit || "0.01")} mUSD</span>
                             </div>
                           </div>
+                          {cip56Musd > 0 && redeemableMusd < parsedAmount && (
+                            <div className="rounded-lg bg-blue-500/10 border border-blue-500/20 px-3 py-2">
+                              <p className="text-xs text-blue-300">
+                                Stake currently requires legacy CantonMUSD. CIP-56 mUSD will be auto-converted when needed.
+                              </p>
+                            </div>
+                          )}
                           <TxButton onClick={handleSmusdStake} loading={txLoading} disabled={tokens.length === 0 || parsedAmount <= 0} className="w-full">
                             <span className="flex items-center justify-center gap-2">
                               <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" /></svg>
@@ -665,7 +684,7 @@ export function CantonStake() {
                           <p className="text-gray-400 font-medium">No redeemable CantonMUSD available</p>
                           <p className="text-sm text-gray-500 mt-1">
                             {cip56Musd > 0
-                              ? "You currently hold CIP-56 mUSD, which is not stakeable in smUSD yet."
+                              ? "CIP-56 is your primary mUSD balance. Staking auto-converts from CIP-56 when triggered."
                               : "Bridge mUSD from Ethereum first."}
                           </p>
                         </div>

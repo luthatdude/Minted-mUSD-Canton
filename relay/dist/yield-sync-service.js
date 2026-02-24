@@ -43,7 +43,7 @@ const DEFAULT_CONFIG = {
     bridgePrivateKey: (0, utils_1.readSecret)("bridge_private_key", "BRIDGE_PRIVATE_KEY"),
     kmsKeyId: process.env.KMS_KEY_ID || "",
     cantonHost: process.env.CANTON_HOST || "localhost",
-    cantonPort: parseInt(process.env.CANTON_PORT || "6865", 10),
+    cantonPort: parseInt(process.env.CANTON_PORT || "7575", 10),
     cantonToken: (0, utils_1.readSecret)("canton_token", "CANTON_TOKEN"),
     cantonParty: process.env.CANTON_PARTY || "",
     validatorParties: (process.env.VALIDATOR_PARTIES || "").split(",").filter(Boolean),

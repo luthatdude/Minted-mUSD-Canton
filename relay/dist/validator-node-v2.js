@@ -48,8 +48,8 @@ const fs = __importStar(require("fs"));
 // INFRA-H-02 / INFRA-H-06: Enforce TLS certificate validation at process level
 (0, utils_1.enforceTLSSecurity)();
 const DEFAULT_CONFIG = {
-    cantonLedgerHost: process.env.CANTON_LEDGER_HOST || "localhost",
-    cantonLedgerPort: parseInt(process.env.CANTON_LEDGER_PORT || "6865", 10),
+    cantonLedgerHost: process.env.CANTON_LEDGER_HOST || process.env.CANTON_HOST || "localhost",
+    cantonLedgerPort: parseInt(process.env.CANTON_LEDGER_PORT || process.env.CANTON_PORT || "7575", 10),
     cantonLedgerToken: (0, utils_1.readSecret)("canton_token", "CANTON_LEDGER_TOKEN"),
     validatorParty: process.env.VALIDATOR_PARTY || "",
     cantonAssetApiUrl: process.env.CANTON_ASSET_API_URL || "https://api.canton.network",
@@ -494,11 +494,26 @@ class ValidatorNode {
             const messageHash = this.buildMessageHash(payload, cantonStateHash);
             // Sign with KMS
             const signature = await this.signWithKMS(messageHash);
-            // Submit to Canton
+            // CRIT-01 FIX: Create ValidatorSelfAttestation before signing the AttestationRequest.
+            // This is a contract where the validator is the sole signatory, proving independent
+            // commitment. The aggregator cannot forge this because only this participant can
+            // create contracts where this validator party is signatory.
+            const selfAttestationCid = await this.canton.createContract({ moduleName: "Minted.Protocol.V3", entityName: "ValidatorSelfAttestation" }, {
+                validator: this.config.validatorParty,
+                aggregator: payload.attestationId.startsWith("bridge-") ? this.config.validatorParty : this.config.validatorParty,
+                attestationId: attestationId,
+                ecdsaSignature: signature,
+                signedAt: new Date().toISOString(),
+            });
+            // Extract the contract ID from the creation response
+            const selfAttestCid = typeof selfAttestationCid === "string"
+                ? selfAttestationCid
+                : selfAttestationCid?.contractId || selfAttestationCid;
+            // Submit to Canton — now includes selfAttestationCid for CRIT-01 compliance
             await this.canton.exerciseChoice(canton_client_1.TEMPLATES.AttestationRequest, contractId, "Attestation_Sign", {
                 validator: this.config.validatorParty,
                 ecdsaSignature: signature,
-                cantonStateHash: cantonStateHash, // Include hash of verified state
+                selfAttestationCid: selfAttestCid,
             });
             this.signedAttestations.add(attestationId);
             console.log(`[Validator] ✓ Signed attestation ${attestationId}`);
@@ -529,14 +544,22 @@ class ValidatorNode {
         const cantonAssets = ethers_1.ethers.parseUnits(payload.totalCantonValue, 18);
         const nonce = BigInt(payload.nonce);
         const timestamp = BigInt(Math.max(1, Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600));
-        // Include entropy in hash (matches BLEBridgeV9 signature verification)
-        const entropy = payload.entropy
-            ? (payload.entropy.startsWith("0x") ? payload.entropy : "0x" + payload.entropy)
-            : ethers_1.ethers.ZeroHash;
-        // Include Canton state hash for on-ledger verification
-        const stateHash = cantonStateHash
-            ? (cantonStateHash.startsWith("0x") ? cantonStateHash : "0x" + cantonStateHash)
-            : ethers_1.ethers.ZeroHash;
+        // CRIT-04 FIX: Reject missing entropy instead of silently falling back to ZeroHash.
+        // BLEBridgeV9 reverts with MissingEntropy() if entropy == bytes32(0), so signing
+        // over ZeroHash produces a signature that will always revert on-chain.
+        if (!payload.entropy || payload.entropy.length < 64) {
+            throw new Error(`CRIT-04: Missing or invalid entropy in attestation ${payload.attestationId}. ` +
+                `BLEBridgeV9 requires non-zero entropy. Got: '${payload.entropy || "(empty)"}'`);
+        }
+        const entropy = payload.entropy.startsWith("0x") ? payload.entropy : "0x" + payload.entropy;
+        // CRIT-04 FIX: Reject missing cantonStateHash instead of silently falling back to ZeroHash.
+        // BLEBridgeV9 reverts with MissingStateHash() if cantonStateHash == bytes32(0).
+        const effectiveStateHash = cantonStateHash || payload.cantonStateHash;
+        if (!effectiveStateHash || effectiveStateHash.length < 64) {
+            throw new Error(`CRIT-04: Missing or invalid cantonStateHash in attestation ${payload.attestationId}. ` +
+                `BLEBridgeV9 requires non-zero state hash. Got: '${effectiveStateHash || "(empty)"}'`);
+        }
+        const stateHash = effectiveStateHash.startsWith("0x") ? effectiveStateHash : "0x" + effectiveStateHash;
         // Derive attestation ID matching BLEBridgeV9.computeAttestationId()
         // Previously used ethers.id(payload.attestationId) which is keccak256(utf8) — wrong.
         // On-chain: keccak256(abi.encodePacked(nonce, cantonAssets, timestamp, entropy, cantonStateHash, chainid, address))

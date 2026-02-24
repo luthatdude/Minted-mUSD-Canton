@@ -140,7 +140,18 @@ export function CantonBridge() {
         const convertNeeded = parsedAmount - redeemableMusd;
         const convResult = await convertCip56ToRedeemable(activeParty, convertNeeded);
         if (!convResult.success) {
-          throw new Error(`CIP-56 conversion failed: ${convResult.error}`);
+          const rawErr = convResult.error || "";
+          // Translate inventory/type errors into user-friendly messages
+          if (rawErr.includes("Insufficient operator inventory") || rawErr.includes("inventoryAvailable")) {
+            const match = rawErr.match(/have ([\d.]+) redeemable, need ([\d.]+)/);
+            const available = match ? match[1] : "0";
+            const needed = match ? match[2] : convertNeeded.toFixed(2);
+            throw new Error(`Conversion inventory low: only ${available} redeemable mUSD available, need ${needed}. Try a smaller amount or wait for inventory replenishment.`);
+          }
+          if (rawErr.includes("WRONGLY_TYPED_CONTRACT") || rawErr.includes("type mismatch")) {
+            throw new Error("Conversion unavailable: operator inventory token mismatch. Contact support or try again later.");
+          }
+          throw new Error(`Auto-conversion failed: ${rawErr}`);
         }
       }
 
@@ -186,7 +197,8 @@ export function CantonBridge() {
         }
 
         const afterSplit = await fetchFreshBalances(activeParty);
-        const exactToken = (afterSplit.tokens || []).find(
+        const afterSplitMusd = (afterSplit.tokens || []).filter((t: any) => t.template === "CantonMUSD");
+        const exactToken = afterSplitMusd.find(
           (t: any) => Math.abs(parseFloat(t.amount) - parsedAmount) < 0.01
         );
 
@@ -387,7 +399,7 @@ export function CantonBridge() {
             {cip56Musd > 0 && (
               <div className="mt-2 rounded-lg bg-blue-500/10 border border-blue-500/20 px-3 py-2">
                 <p className="text-xs text-blue-300">
-                  CIP-56 mUSD is automatically converted to redeemable CantonMUSD when needed for bridging or staking.
+                  CIP-56 is your primary mUSD balance. Redeem currently requires legacy CantonMUSD and auto-converts from CIP-56 when needed.
                 </p>
               </div>
             )}
