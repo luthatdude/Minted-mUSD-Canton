@@ -381,6 +381,18 @@ jobs:
         working-directory: relay
         run: npx tsc --noEmit
 
+      - name: Verify dist/ is up-to-date with source
+        working-directory: relay
+        run: |
+          npm run build
+          if ! git diff --quiet --exit-code dist/; then
+            echo "::error::relay/dist/ is out of sync with source!"
+            echo "Run 'cd relay && npm run build' and commit the result."
+            git diff --stat dist/
+            exit 1
+          fi
+          echo "✅ relay/dist/ matches source"
+
   # ============================================================
   #  DOCKER: Build & Scan Relay Image
   # ============================================================
