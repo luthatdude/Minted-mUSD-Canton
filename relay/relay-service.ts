@@ -610,6 +610,9 @@ class RelayService {
 
   // CIP-56: Cached transfer factory contract ID (null = not deployed, use legacy)
   private cip56TransferFactoryCid: string | null = null;
+  // C1: Periodic re-query to detect factory redeployment without relay restart
+  private cip56FactoryLastChecked: number = 0;
+  private static readonly CIP56_FACTORY_REFRESH_MS = 5 * 60 * 1000; // 5 minutes
 
   // BRIDGE-M-05: Named constant for the expiry-to-timestamp offset.
   // The DAML attestation carries an `expiresAt` timestamp (when the attestation becomes invalid).
@@ -1152,6 +1155,7 @@ class RelayService {
       );
       if (cip56Factories.length > 0) {
         this.cip56TransferFactoryCid = cip56Factories[0].contractId;
+        this.cip56FactoryLastChecked = Date.now(); // C1: seed refresh timer
         console.log(`[Relay] CIP-56 MUSDTransferFactory detected (cid: ${this.cip56TransferFactoryCid.slice(0, 20)}...). CIP-56 transfers enabled.`);
       } else {
         console.log("[Relay] CIP-56 MUSDTransferFactory not found. Using legacy CantonMUSD_Transfer flow.");
@@ -2315,11 +2319,38 @@ class RelayService {
    * @param amountStr   mUSD amount as a string (e.g., "50.0")
    * @param userParty   Canton party to own the minted CantonMUSD
    */
+  // C1: Periodic refresh of CIP-56 factory CID to detect redeployment
+  private async refreshCip56FactoryCid(): Promise<void> {
+    const now = Date.now();
+    if (now - this.cip56FactoryLastChecked < RelayService.CIP56_FACTORY_REFRESH_MS) return;
+    try {
+      const factories = await this.canton.queryContracts(
+        TEMPLATES.MUSDTransferFactory,
+        (p: any) => true
+      );
+      const newCid = factories.length > 0 ? factories[0].contractId : null;
+      if (newCid !== this.cip56TransferFactoryCid) {
+        if (newCid) {
+          console.log(`[Relay] CIP-56 MUSDTransferFactory refreshed (cid: ${newCid.slice(0, 20)}...).`);
+        } else {
+          console.log("[Relay] CIP-56 MUSDTransferFactory no longer found. Reverting to legacy flow.");
+        }
+        this.cip56TransferFactoryCid = newCid;
+      }
+      this.cip56FactoryLastChecked = now;
+    } catch {
+      // Keep previous value on query failure — don't flip-flop on transient errors
+    }
+  }
+
   private async completeBridgeInAndMintMusd(
     nonce: number,
     amountStr: string,
     userParty: string
   ): Promise<void> {
+    // C1: Refresh factory CID if stale (every 5 minutes)
+    await this.refreshCip56FactoryCid();
+
     try {
       // Create CantonMUSD token for the user
       // Use a deterministic agreementHash for idempotency checking
@@ -2395,7 +2426,10 @@ class RelayService {
           if (cip56Existing.length > 0) {
             existingMusd = cip56Existing;
           }
-        } catch { /* CIP56MintedMUSD duplicate check failed — proceed with create */ }
+        } catch (dupErr: any) {
+          // C2: Log rather than silently swallow — helps diagnose partial API failures
+          console.warn(`[Relay] CIP-56 duplicate check failed for bridge #${nonce}: ${dupErr?.message?.slice(0, 100) || dupErr}`);
+        }
       }
 
       const musdAlreadyExists = existingMusd.length > 0;
@@ -2416,6 +2450,7 @@ class RelayService {
         // CIP-56 TransferFactory_Transfer instead of legacy CantonMUSD_Transfer.
         // Falls back to legacy path on any CIP-56 error.
         let mintAndTransferDone = false;
+        let cip56MintCreated = false; // C4: track CIP-56 mint to prevent dual-mint on fallback
         if (this.cip56TransferFactoryCid) {
           try {
             const cip56Payload = {
@@ -2432,6 +2467,7 @@ class RelayService {
               cip56Payload
             );
             console.log(`[Relay] Created CIP56MintedMUSD (operator-owned) for bridge-in #${nonce}: ${amountStr} mUSD`);
+            cip56MintCreated = true; // C4: mint succeeded — do NOT create legacy CantonMUSD if transfer fails
 
             if (userParty !== this.config.cantonParty) {
               let holdingCid = this.extractCreatedContractId(cip56CreateResult, "CIP56MintedMUSD");
@@ -2506,9 +2542,19 @@ class RelayService {
             }
             mintAndTransferDone = true;
           } catch (cip56Err: any) {
-            if (!mintAndTransferDone) {
+            if (!mintAndTransferDone && cip56MintCreated) {
+              // C4: CIP56MintedMUSD exists on ledger but transfer failed.
+              // Do NOT fall back to legacy — that would create a second token for the same bridge-in.
+              // CIP-56 orphan recovery will deliver the stranded CIP56MintedMUSD.
               console.warn(
-                `[Relay] CIP-56 mint/transfer failed for bridge #${nonce}, falling back to legacy: ${(cip56Err as Error).message?.slice(0, 120)}`
+                `[Relay] CIP-56 transfer failed for bridge #${nonce} but CIP56MintedMUSD exists; ` +
+                `orphan recovery will deliver. Error: ${(cip56Err as Error).message?.slice(0, 120)}`
+              );
+              mintAndTransferDone = true; // prevent legacy fallback
+            } else if (!mintAndTransferDone) {
+              // CIP56MintedMUSD creation itself failed — safe to fall back to legacy
+              console.warn(
+                `[Relay] CIP-56 mint failed for bridge #${nonce}, falling back to legacy: ${(cip56Err as Error).message?.slice(0, 120)}`
               );
             }
           }
@@ -2793,6 +2839,9 @@ class RelayService {
   }
 
   private async recoverOrphanedMusd(): Promise<void> {
+    // C1: Refresh factory CID if stale (every 5 minutes)
+    await this.refreshCip56FactoryCid();
+
     let operatorMusd: ActiveContract<any>[] = [];
     try {
       operatorMusd = await this.canton.queryContracts(

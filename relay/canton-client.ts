@@ -425,9 +425,11 @@ export const TEMPLATES = {
   // ETH Pool service (yield → pooledUsdc counter, share price ↑)
   CantonETHPoolService:   { moduleName: "CantonETHPool", entityName: "CantonETHPoolService" } as TemplateId,
   // CIP-56 factories and instructions (ble-protocol-cip56 package, SDK 3.4.10)
-  CIP56MintedMUSD:            { moduleName: "CIP56Interfaces", entityName: "CIP56MintedMUSD" } as TemplateId,
-  MUSDTransferFactory:        { moduleName: "CIP56Interfaces", entityName: "MUSDTransferFactory" } as TemplateId,
-  MUSDTransferInstruction:    { moduleName: "CIP56Interfaces", entityName: "MUSDTransferInstruction" } as TemplateId,
-  MUSDAllocationFactory:      { moduleName: "CIP56Interfaces", entityName: "MUSDAllocationFactory" } as TemplateId,
-  MUSDAllocation:             { moduleName: "CIP56Interfaces", entityName: "MUSDAllocation" } as TemplateId,
+  // C3: packageId pinned from CIP56_PACKAGE_ID env var to avoid template ambiguity.
+  // Queries work without packageId (match any package); creates/exercises require it.
+  CIP56MintedMUSD:            { moduleName: "CIP56Interfaces", entityName: "CIP56MintedMUSD", ...(process.env.CIP56_PACKAGE_ID ? { packageId: process.env.CIP56_PACKAGE_ID } : {}) } as TemplateId,
+  MUSDTransferFactory:        { moduleName: "CIP56Interfaces", entityName: "MUSDTransferFactory", ...(process.env.CIP56_PACKAGE_ID ? { packageId: process.env.CIP56_PACKAGE_ID } : {}) } as TemplateId,
+  MUSDTransferInstruction:    { moduleName: "CIP56Interfaces", entityName: "MUSDTransferInstruction", ...(process.env.CIP56_PACKAGE_ID ? { packageId: process.env.CIP56_PACKAGE_ID } : {}) } as TemplateId,
+  MUSDAllocationFactory:      { moduleName: "CIP56Interfaces", entityName: "MUSDAllocationFactory", ...(process.env.CIP56_PACKAGE_ID ? { packageId: process.env.CIP56_PACKAGE_ID } : {}) } as TemplateId,
+  MUSDAllocation:             { moduleName: "CIP56Interfaces", entityName: "MUSDAllocation", ...(process.env.CIP56_PACKAGE_ID ? { packageId: process.env.CIP56_PACKAGE_ID } : {}) } as TemplateId,
 } as const;
