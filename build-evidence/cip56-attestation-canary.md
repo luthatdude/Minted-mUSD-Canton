@@ -4,9 +4,12 @@
 
 ## Summary
 
-Bridge nonces #19 and #20 completed the full attestation path end-to-end using the
-fixed LF2 package (`f9481d29...`). This resolves the CRIT-01 violation and
+Bridge nonces #19, #20, #22, and #26 completed the full attestation path end-to-end
+using the fixed LF2 package (`f9481d29...`). This resolves the CRIT-01 violation and
 PreconditionFailed errors from the `eff3bf30...` package.
+
+Bridge #26 is the **fresh canary** — submitted directly to local party
+`minted-canary::122006df...` (no remapping needed), nonce 26, 1.0 mUSD.
 
 ## Gate Criteria — ALL PASSED
 
@@ -60,6 +63,34 @@ The fixed `f9481d29` package corrects this:
 [Relay] Attestation signed: validator 1/1 for #20
 [Relay] ✅ BridgeIn_Complete exercised for #20 with attestation 0088ef04db02ab14...
 ```
+
+## Bridge #22 — Full Path Log
+
+```
+[Relay] Created CIP56MintedMUSD (operator-owned) for bridge-in #22: 1.0 mUSD
+[Relay] ✅ CIP-56 TransferFactory_Transfer created for bridge #22 → minted-canary::122006df00c6314...
+[Relay] ✅ CIP-56 transfer accepted for bridge #22; mUSD delivered to user
+[Relay] Attestation signed: validator 1/1 for #22
+[Relay] ✅ BridgeIn_Complete exercised for #22 with attestation 005867fb2cec9a34...
+```
+
+## Bridge #26 — Fresh Canary (direct to local party)
+
+- **Ethereum tx**: `0x11c9fd8c0b780ef613cd109f198660965d3b4323e121668155231395031a218d`
+- **Block**: 10325256 (Sepolia)
+- **Amount**: 1.0 mUSD
+- **Recipient**: `minted-canary::122006df00c631440327e68ba87f61795bbcd67db26142e580137e5038649f22edce` (direct, no remapping)
+- **Canton status**: `completed` (verified via ACS query)
+- **RequestId**: `0x134c69e45b9052f8876d41c42a56cca2115b02c18ded13c6afccfa1ba08bd6f6`
+
+## On-Chain Verification (Canton ACS)
+
+| Nonce | Status | Amount |
+|-------|--------|--------|
+| 19 | completed | 500.0 mUSD |
+| 20 | completed | 1000.0 mUSD |
+| 22 | completed | 1.0 mUSD |
+| 26 | completed | 1.0 mUSD |
 
 ## Manual Signing Test
 
