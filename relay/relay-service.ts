@@ -1154,9 +1154,17 @@ class RelayService {
         (p: any) => true
       );
       if (cip56Factories.length > 0) {
-        this.cip56TransferFactoryCid = cip56Factories[0].contractId;
-        this.cip56FactoryLastChecked = Date.now(); // C1: seed refresh timer
-        console.log(`[Relay] CIP-56 MUSDTransferFactory detected (cid: ${this.cip56TransferFactoryCid.slice(0, 20)}...). CIP-56 transfers enabled.`);
+        if (!process.env.CIP56_PACKAGE_ID) {
+          console.warn(
+            "[Relay] CIP-56 MUSDTransferFactory found on ledger but CIP56_PACKAGE_ID env var is NOT set. " +
+            "CIP-56 path DISABLED — creates/exercises would target the wrong package. " +
+            "Set CIP56_PACKAGE_ID to the ble-protocol-cip56 DAR package ID to enable."
+          );
+        } else {
+          this.cip56TransferFactoryCid = cip56Factories[0].contractId;
+          this.cip56FactoryLastChecked = Date.now(); // C1: seed refresh timer
+          console.log(`[Relay] CIP-56 MUSDTransferFactory detected (cid: ${this.cip56TransferFactoryCid.slice(0, 20)}...). CIP-56 transfers enabled.`);
+        }
       } else {
         console.log("[Relay] CIP-56 MUSDTransferFactory not found. Using legacy CantonMUSD_Transfer flow.");
       }
@@ -2321,6 +2329,7 @@ class RelayService {
    */
   // C1: Periodic refresh of CIP-56 factory CID to detect redeployment
   private async refreshCip56FactoryCid(): Promise<void> {
+    if (!process.env.CIP56_PACKAGE_ID) return; // no package ID → CIP-56 disabled
     const now = Date.now();
     if (now - this.cip56FactoryLastChecked < RelayService.CIP56_FACTORY_REFRESH_MS) return;
     try {
