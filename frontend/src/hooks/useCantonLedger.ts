@@ -14,6 +14,7 @@ export interface CantonMUSDToken {
   sourceChain: number;
   ethTxHash: string;
   createdAt: string;
+  template: "CantonMUSD" | "CIP56MintedMUSD";
 }
 
 export interface BridgeServiceInfo {
@@ -101,6 +102,9 @@ export interface CantonBalancesData {
   tokens: CantonMUSDToken[];
   totalBalance: string;
   tokenCount: number;
+  redeemableBalance: string;
+  redeemableTokenCount: number;
+  cip56Balance: string;
   bridgeService: BridgeServiceInfo | null;
   pendingBridgeIns: number;
   supplyService: boolean;
@@ -217,6 +221,31 @@ export async function fetchFreshBalances(party?: string | null): Promise<CantonB
     throw new Error(err.error || `HTTP ${resp.status}`);
   }
   return resp.json();
+}
+
+/**
+ * Convert CIP-56 mUSD → redeemable CantonMUSD via server-side inventory swap.
+ * Returns the conversion result or throws on failure.
+ */
+export async function convertCip56ToRedeemable(
+  party: string,
+  amount: number
+): Promise<{ success: boolean; convertedAmount: string; commandId: string; error?: string }> {
+  const resp = await fetch("/api/canton-convert", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ party, amount: amount.toFixed(10) }),
+  });
+  const contentType = resp.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    const text = await resp.text().catch(() => "Unknown error");
+    return { success: false, convertedAmount: "0", commandId: "", error: `HTTP ${resp.status}: ${text.slice(0, 300)}` };
+  }
+  const result = await resp.json();
+  if (!resp.ok || result.error) {
+    return { success: false, convertedAmount: "0", commandId: "", error: result.error || `HTTP ${resp.status}` };
+  }
+  return result;
 }
 
 /**

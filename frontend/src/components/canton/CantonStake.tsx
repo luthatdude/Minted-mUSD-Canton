@@ -7,6 +7,7 @@ import {
   useCantonLedger,
   cantonExercise,
   fetchFreshBalances,
+  convertCip56ToRedeemable,
   type CantonBalancesData,
   type SimpleToken,
 } from "@/hooks/useCantonLedger";
@@ -75,7 +76,9 @@ export function CantonStake() {
   const [txSuccess, setTxSuccess] = useState<string | null>(null);
 
   const totalMusd = data ? parseFloat(data.totalBalance) : 0;
-  const tokens = data?.tokens || [];
+  const redeemableMusd = data ? parseFloat(data.redeemableBalance || "0") : 0;
+  const cip56Musd = data ? parseFloat(data.cip56Balance || "0") : 0;
+  const tokens = (data?.tokens || []).filter((t) => t.template === "CantonMUSD");
   const stakingService = data?.stakingService || null;
   const ethPoolService = data?.ethPoolService || null;
   const boostPoolService = data?.boostPoolService || null;
@@ -109,13 +112,13 @@ export function CantonStake() {
 
   const ethPoolSharePrice = ethPoolService ? parseFloat(ethPoolService.sharePrice) : 1.0;
   const ethPoolTVL = ethPoolService ? parseFloat(ethPoolService.totalMusdStaked) : 0;
-  const ethPoolCapNum = ethPoolService ? parseFloat(ethPoolService.poolCap) : 10_000_000;
-  const ethPoolUtil = ethPoolCapNum > 0 ? (ethPoolTVL / ethPoolCapNum) * 100 : 0;
+  const boostSharePrice = boostPoolService ? parseFloat(boostPoolService.globalSharePrice) : 1.0;
+  const boostApy = Math.max(0, (boostSharePrice - 1) * 100);
 
   async function selectTokenForRequestedAmount(
     party: string,
-    templateId: "CantonMUSD" | "CantonUSDC" | "USDCx" | "CantonCoin",
-    splitChoice: "CantonMUSD_Split" | "CantonUSDC_Split" | "USDCx_Split" | "CantonCoin_Split",
+    templateId: "CantonMUSD" | "CantonUSDC" | "USDCx" | "CantonCoin" | "CantonSMUSD_E",
+    splitChoice: "CantonMUSD_Split" | "CantonUSDC_Split" | "USDCx_Split" | "CantonCoin_Split" | "SMUSDE_Split",
     tokensList: SimpleToken[],
     requested: number,
     getTokens: (fresh: CantonBalancesData) => SimpleToken[],
@@ -168,14 +171,27 @@ export function CantonStake() {
         freshService = operatorFresh?.stakingService || null;
       }
       if (!freshService) throw new Error("Staking service not found");
-      const freshTokens = fresh.tokens || [];
+      let freshTokens = (fresh.tokens || []).filter((t) => t.template === "CantonMUSD");
+      const freshRedeemable = freshTokens.reduce((s, t) => s + parseFloat(t.amount || "0"), 0);
+      const freshCip56 = parseFloat(fresh.cip56Balance || "0");
+      // Auto-convert CIP-56 → redeemable if insufficient redeemable balance
+      if (freshRedeemable < parsedAmount && freshCip56 > 0 && freshRedeemable + freshCip56 >= parsedAmount) {
+        const convertNeeded = parsedAmount - freshRedeemable;
+        const convResult = await convertCip56ToRedeemable(activeParty, convertNeeded);
+        if (!convResult.success) throw new Error(`CIP-56 conversion failed: ${convResult.error}`);
+        const refreshed = await fetchFreshBalances(activeParty);
+        freshTokens = (refreshed.tokens || []).filter((t) => t.template === "CantonMUSD");
+      }
+      if (freshTokens.length === 0) {
+        throw new Error("No CantonMUSD tokens available for staking");
+      }
       const token = await selectTokenForRequestedAmount(
         fresh.party,
         "CantonMUSD",
         "CantonMUSD_Split",
         freshTokens,
         parsedAmount,
-        (refreshed) => refreshed.tokens || [],
+        (refreshed) => (refreshed.tokens || []).filter((t) => t.template === "CantonMUSD"),
         "mUSD"
       );
       const resp = await cantonExercise("CantonStakingService", freshService.contractId, "Stake", {
@@ -285,6 +301,7 @@ export function CantonStake() {
     setTxLoading(true); setTxError(null); setTxSuccess(null);
     try {
       if (!hasConnectedUserParty || !activeParty) throw new Error("Connect your Loop wallet party first.");
+      if (parsedAmount <= 0) throw new Error("Enter a valid smUSD-E amount.");
       // Fetch fresh data (ETHPool_Unstake is consuming)
       const fresh = await fetchFreshBalances(activeParty);
       let freshService = fresh.ethPoolService;
@@ -294,13 +311,22 @@ export function CantonStake() {
       }
       if (!freshService) throw new Error("ETH Pool service not found");
       const freshSmusdE = fresh.smusdETokens || [];
-      const smusdE = freshSmusdE[selectedAssetIdx] || freshSmusdE[0];
+      const smusdE = await selectTokenForRequestedAmount(
+        fresh.party,
+        "CantonSMUSD_E",
+        "SMUSDE_Split",
+        freshSmusdE,
+        parsedAmount,
+        (refreshed) => refreshed.smusdETokens || [],
+        "smUSD-E"
+      );
       if (!smusdE) throw new Error("No smUSD-E shares found");
       const resp = await cantonExercise("CantonETHPoolService", freshService.contractId, "ETHPool_Unstake", {
         user: fresh.party, smusdeCid: smusdE.contractId,
       }, { party: fresh.party });
       if (!resp.success) throw new Error(resp.error || "Unstake failed");
-      setTxSuccess(`Unstaked ${fmtAmount(smusdE.amount)} smUSD-E → mUSD`);
+      setTxSuccess(`Unstaked ${fmtAmount(parsedAmount, 4)} smUSD-E → mUSD`);
+      setAmount("");
       await refresh();
     } catch (err: any) { setTxError(err.message); }
     finally { setTxLoading(false); }
@@ -470,7 +496,7 @@ export function CantonStake() {
                           <div className="space-y-3">
                             <div className="flex items-center justify-between">
                               <label className="text-sm font-medium text-gray-400">You Stake</label>
-                              <span className="text-xs text-gray-500">Balance: {fmtAmount(totalMusd)} mUSD</span>
+                              <span className="text-xs text-gray-500">Balance: {fmtAmount(redeemableMusd)} mUSD redeemable</span>
                             </div>
                             <div className="relative rounded-xl border border-white/10 bg-surface-800/50 p-4 transition-all duration-300 focus-within:border-emerald-500/50 focus-within:shadow-[0_0_20px_-5px_rgba(16,185,129,0.3)]">
                               <div className="flex items-center gap-4">
@@ -484,7 +510,7 @@ export function CantonStake() {
                                 <div className="flex items-center gap-2">
                                   <button
                                     className="rounded-lg bg-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-400 transition-colors hover:bg-emerald-500/30"
-                                    onClick={() => setAmount(toInputAmount(totalMusd))}
+                                    onClick={() => setAmount(toInputAmount(redeemableMusd))}
                                   >
                                     MAX
                                   </button>
@@ -549,8 +575,12 @@ export function CantonStake() {
                         </>
                       ) : (
                         <div className="text-center py-12">
-                          <p className="text-gray-400 font-medium">No mUSD tokens available</p>
-                          <p className="text-sm text-gray-500 mt-1">Bridge mUSD from Ethereum first</p>
+                          <p className="text-gray-400 font-medium">No redeemable CantonMUSD available</p>
+                          <p className="text-sm text-gray-500 mt-1">
+                            {cip56Musd > 0
+                              ? "You currently hold CIP-56 mUSD, which is not stakeable in smUSD yet."
+                              : "Bridge mUSD from Ethereum first."}
+                          </p>
                         </div>
                       )
                     ) : (
@@ -596,7 +626,7 @@ export function CantonStake() {
                 <div className="grid gap-4 grid-cols-2">
                   <StatCard label="Share Price" value={`${smusdSharePrice.toFixed(4)} mUSD`} subValue="per smUSD" color="green" />
                   <StatCard label="Estimated APY" value={`${smusdApy.toFixed(2)}%`} color="green" />
-                  <StatCard label="Available mUSD" value={fmtAmount(totalMusd)} subValue={`${tokens.length} contracts`} color="blue" />
+                  <StatCard label="Available mUSD" value={fmtAmount(redeemableMusd)} subValue={`${tokens.length} redeemable contracts`} color="blue" />
                   <StatCard label="Your smUSD" value={fmtAmount(totalSmusd, 4)} subValue={totalSmusd > 0 ? `\u2248 ${fmtAmount(smusdPositionValue)} mUSD` : undefined} color="purple" />
                 </div>
                 <div className="grid gap-4 grid-cols-2">
@@ -662,11 +692,11 @@ export function CantonStake() {
                 <div className="card-gradient-border overflow-hidden">
                   <div className="flex border-b border-white/10">
                     <button className={`relative flex-1 px-6 py-4 text-center text-sm font-semibold transition-all ${tab === "stake" ? "text-white" : "text-gray-400 hover:text-white"}`} onClick={() => { setTab("stake"); setAmount(""); }}>
-                      <span className="relative z-10 flex items-center justify-center gap-2">Deposit</span>
+                      <span className="relative z-10 flex items-center justify-center gap-2">Stake</span>
                       {tab === "stake" && <span className="absolute bottom-0 left-1/2 h-0.5 w-24 -translate-x-1/2 rounded-full bg-gradient-to-r from-blue-500 to-indigo-500" />}
                     </button>
                     <button className={`relative flex-1 px-6 py-4 text-center text-sm font-semibold transition-all ${tab === "unstake" ? "text-white" : "text-gray-400 hover:text-white"}`} onClick={() => { setTab("unstake"); setAmount(""); }}>
-                      <span className="relative z-10 flex items-center justify-center gap-2">Withdraw</span>
+                      <span className="relative z-10 flex items-center justify-center gap-2">Unstake</span>
                       {tab === "unstake" && <span className="absolute bottom-0 left-1/2 h-0.5 w-24 -translate-x-1/2 rounded-full bg-gradient-to-r from-blue-500 to-indigo-500" />}
                     </button>
                   </div>
@@ -734,31 +764,44 @@ export function CantonStake() {
                           </div>
                         )}
                         <TxButton onClick={handleEthPoolStake} loading={txLoading} disabled={selectedDepositTokens.length === 0 || parsedAmount <= 0} className="w-full">
-                          Deposit {depositAsset} → smUSD-E
+                          Stake {depositAsset} → smUSD-E
                         </TxButton>
                       </>
                     ) : (
                       smusdETokens.length === 0 ? (
                         <div className="text-center py-12">
                           <p className="text-gray-400 font-medium">No smUSD-E positions yet</p>
-                          <p className="text-sm text-gray-500 mt-1">Switch to Deposit tab to create a staking position</p>
+                          <p className="text-sm text-gray-500 mt-1">Switch to Stake tab to create a staking position</p>
                         </div>
                       ) : (
                         <div className="space-y-3">
-                          <label className="text-sm font-medium text-gray-400">Select smUSD-E Position to Unstake</label>
-                          {smusdETokens.map((smusdE, idx) => (
-                            <button key={smusdE.contractId} onClick={() => setSelectedAssetIdx(idx)}
-                              className={`w-full rounded-xl border p-4 text-left transition-all ${selectedAssetIdx === idx ? "border-blue-500 bg-blue-500/10" : "border-white/10 bg-surface-800/50 hover:border-white/30"}`}>
-                              <div className="flex items-center justify-between">
-                                <div>
-                                  <span className="font-semibold text-white">{fmtAmount(smusdE.amount, 4)} smUSD-E</span>
-                                  <p className="text-xs text-gray-500 mt-1">\u2248 {fmtAmount(parseFloat(smusdE.amount) * ethPoolSharePrice)} mUSD</p>
+                          <div className="flex items-center justify-between">
+                            <label className="text-sm font-medium text-gray-400">Unstake Amount</label>
+                            <span className="text-xs text-gray-500">Balance: {fmtAmount(totalSmusdE, 4)} smUSD-E</span>
+                          </div>
+                          <div className="relative rounded-xl border border-white/10 bg-surface-800/50 p-4 transition-all duration-300 focus-within:border-blue-500/50">
+                            <div className="flex items-center gap-4">
+                              <input
+                                type="number"
+                                className="flex-1 bg-transparent text-2xl font-semibold text-white placeholder-gray-600 focus:outline-none"
+                                placeholder="0.00"
+                                value={amount}
+                                onChange={(e) => setAmount(e.target.value)}
+                              />
+                              <div className="flex items-center gap-2">
+                                <button
+                                  className="rounded-lg bg-blue-500/20 px-3 py-1.5 text-xs font-semibold text-blue-300 transition-colors hover:bg-blue-500/30"
+                                  onClick={() => setAmount(toInputAmount(totalSmusdE))}
+                                >
+                                  MAX
+                                </button>
+                                <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
+                                  <span className="font-semibold text-white">smUSD-E</span>
                                 </div>
-                                <span className="rounded-full bg-blue-500/20 px-2 py-0.5 text-xs text-blue-400">Active</span>
                               </div>
-                            </button>
-                          ))}
-                          <TxButton onClick={handleEthPoolUnstake} loading={txLoading} disabled={smusdETokens.length === 0} className="w-full">
+                            </div>
+                          </div>
+                          <TxButton onClick={handleEthPoolUnstake} loading={txLoading} disabled={smusdETokens.length === 0 || parsedAmount <= 0} className="w-full">
                             Unstake smUSD-E \u2192 mUSD
                           </TxButton>
                         </div>
@@ -774,9 +817,21 @@ export function CantonStake() {
               <div className="space-y-4">
                 <div className="grid gap-4 grid-cols-2">
                   <StatCard label="Share Price" value={`${ethPoolSharePrice.toFixed(4)} mUSD`} subValue="per smUSD-E" color="blue" />
-                  <StatCard label="Pool TVL" value={fmtAmount(ethPoolTVL) + " USDC"} color="green" />
-                  <StatCard label="Pool Utilization" value={`${ethPoolUtil.toFixed(1)}%`} color="yellow" />
-                  <StatCard label="Pool Cap" value={fmtAmount(ethPoolCapNum, 0) + " USDC"} color="purple" />
+                  <StatCard label="Estimated APY" value={`${Math.max(0, (ethPoolSharePrice - 1) * 100).toFixed(2)}%`} color="green" />
+                  <StatCard
+                    label={`Available ${depositAsset}`}
+                    value={fmtAmount(selectedDepositBalance)}
+                    subValue={`${selectedDepositTokens.length} contracts`}
+                    color="blue"
+                  />
+                  <StatCard
+                    label="Your smUSD-E"
+                    value={fmtAmount(totalSmusdE, 4)}
+                    subValue={totalSmusdE > 0 ? `≈ ${fmtAmount(totalSmusdE * ethPoolSharePrice)} mUSD` : undefined}
+                    color="purple"
+                  />
+                  <StatCard label="Pool TVL" value={fmtAmount(ethPoolTVL) + " mUSD"} color="blue" />
+                  <StatCard label="Total Shares" value={fmtAmount(parseFloat(ethPoolService?.totalShares || "0"), 4)} color="purple" />
                 </div>
                 <div className="card overflow-hidden">
                   <h3 className="text-sm font-medium text-gray-400 mb-3">Your Canton Assets</h3>
@@ -959,7 +1014,7 @@ export function CantonStake() {
                   <StatCard label="CTN Price" value={`${parseFloat(boostPoolService.cantonPriceMusd).toFixed(4)} mUSD`} color="yellow" />
                   <StatCard label="Share Price" value={`${parseFloat(boostPoolService.globalSharePrice).toFixed(4)}`} subValue="per Boost LP" color="green" />
                   <StatCard label="Total CTN Deposited" value={fmtAmount(boostPoolService.totalCantonDeposited)} color="blue" />
-                  <StatCard label="Total LP Shares" value={fmtAmount(boostPoolService.totalLPShares)} color="purple" />
+                  <StatCard label="APY" value={`${boostApy.toFixed(2)}%`} color="purple" />
                 </div>
                 <div className="card overflow-hidden">
                   <h3 className="text-sm font-medium text-gray-400 mb-3">Your Boost Positions</h3>

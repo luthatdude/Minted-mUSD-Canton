@@ -9,6 +9,7 @@ import {
   cantonExercise,
   fetchFreshBalances,
   refreshPriceFeeds,
+  convertCip56ToRedeemable,
   type CantonBalancesData,
   type EscrowInfo,
   type SimpleToken,
@@ -395,12 +396,24 @@ export function CantonBorrow() {
           throw new Error("Selected debt is already settled.");
         }
 
-        const selectedMusd = pickContractForAmount(fresh.tokens || [], targetRepayAmount);
+        // Filter to redeemable CantonMUSD only (Lending_Repay requires CantonMUSD CID)
+        let repayTokens = (fresh.tokens || []).filter((t) => t.template === "CantonMUSD");
+        const redeemableTotal = repayTokens.reduce((s, t) => s + parseFloat(t.amount || "0"), 0);
+        const cip56Total = parseFloat(fresh.cip56Balance || "0");
+        // Auto-convert CIP-56 if redeemable insufficient
+        if (redeemableTotal < targetRepayAmount && cip56Total > 0 && redeemableTotal + cip56Total >= targetRepayAmount) {
+          const convertNeeded = targetRepayAmount - redeemableTotal;
+          const convResult = await convertCip56ToRedeemable(activeParty, convertNeeded);
+          if (!convResult.success) throw new Error(`CIP-56 conversion failed: ${convResult.error}`);
+          const refreshed = await fetchFreshBalances(activeParty);
+          repayTokens = (refreshed.tokens || []).filter((t) => t.template === "CantonMUSD");
+        }
+        const selectedMusd = pickContractForAmount(repayTokens, targetRepayAmount);
         if (!selectedMusd) {
-          const maxAvailable = (fresh.tokens || []).reduce((max, token) => Math.max(max, parseFloat(token.amount || "0")), 0);
+          const maxAvailable = repayTokens.reduce((max, token) => Math.max(max, parseFloat(token.amount || "0")), 0);
           throw new Error(
             maxAvailable > 0
-              ? `No mUSD contract large enough. Largest available is ${fmtAmount(maxAvailable)} mUSD.`
+              ? `No redeemable mUSD contract large enough. Largest available is ${fmtAmount(maxAvailable)} mUSD.`
               : "No mUSD token available for repayment."
           );
         }
