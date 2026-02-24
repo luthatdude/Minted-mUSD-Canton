@@ -18,7 +18,7 @@ type AdminSection = "emergency" | "musd" | "directmint" | "treasury" | "vaults" 
 const CANTON_PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || "";
 const CANTON_OPERATOR_PARTY =
   process.env.NEXT_PUBLIC_CANTON_OPERATOR_PARTY ||
-  "minted-validator-1::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
+  "sv::122006df00c631440327e68ba87f61795bbcd67db26142e580137e5038649f22edce";
 const CANTON_FAUCET_TEMPLATES = {
   CantonUSDC: `${CANTON_PACKAGE_ID}:CantonDirectMint:CantonUSDC`,
   USDCx: `${CANTON_PACKAGE_ID}:CantonDirectMint:USDCx`,

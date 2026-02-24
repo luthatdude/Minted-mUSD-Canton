@@ -15,30 +15,65 @@ const CANTON_BASE_URL =
 const CANTON_TOKEN = process.env.CANTON_TOKEN || "dummy-no-auth";
 const CANTON_PARTY =
   process.env.CANTON_PARTY ||
-  "minted-validator-1::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
+  "sv::122006df00c631440327e68ba87f61795bbcd67db26142e580137e5038649f22edce";
 const RECIPIENT_ALIAS_MAP_RAW = process.env.CANTON_RECIPIENT_PARTY_ALIASES || "";
+const DEVNET_CANARY_PARTY =
+  "minted-canary::122006df00c631440327e68ba87f61795bbcd67db26142e580137e5038649f22edce";
+const DEFAULT_RECIPIENT_ALIAS_MAP: Record<string, string> = {
+  "minted-user-33f97321":
+    DEVNET_CANARY_PARTY,
+  "minted-user-33f97321::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9":
+    DEVNET_CANARY_PARTY,
+  "minted-user-33f97321::122006df00c631440327e68ba87f61795bbcd67db26142e580137e5038649f22edce":
+    DEVNET_CANARY_PARTY,
+  "dde6467edc610708573d717a53c7c396":
+    DEVNET_CANARY_PARTY,
+  "dde6467edc610708573d717a53c7c396::12200d9a833bb01839aa0c236eb5fe18008bd21fa980873a0c463ba1866506b4af9e":
+    DEVNET_CANARY_PARTY,
+  "eb4e4b84e7db045557f78d9b5e8c2b98":
+    DEVNET_CANARY_PARTY,
+  "eb4e4b84e7db045557f78d9b5e8c2b98::12202dadec11aab8a9dc6ad790b6caab962e2c39ff419a2ae0d12e9ce6e87601ebad":
+    DEVNET_CANARY_PARTY,
+};
 const PACKAGE_ID =
   process.env.NEXT_PUBLIC_DAML_PACKAGE_ID ||
   process.env.CANTON_PACKAGE_ID ||
   "0489a86388cc81e3e0bee8dc8f6781229d0e01451c1f2d19deea594255e5993b";
+const CIP56_PACKAGE_ID =
+  process.env.NEXT_PUBLIC_CIP56_PACKAGE_ID ||
+  process.env.CIP56_PACKAGE_ID ||
+  "11347710f0e7a9c6386bd712ea3850b3787534885cd662d35e35afcb329d60e5";
+// Service contracts may live under a different package than PACKAGE_ID
+// (e.g. created under eff3bf30 before migration to f9481d29).
+// Collect all known V3 package IDs to fan out service discovery queries.
+const V3_PACKAGE_IDS: string[] = Array.from(new Set([
+  PACKAGE_ID,
+  process.env.CANTON_PACKAGE_ID,
+  // Known deployed V3 packages on devnet
+  "eff3bf30edb508b2d052f969203db972e59c66e974344ed43016cfccfa618f06",
+  "f9481d29611628c7145d3d9a856aed6bb318d7fdd371a0262dbac7ca22b0142b",
+].filter((id): id is string => typeof id === "string" && id.length === 64)));
 const CANTON_PARTY_PATTERN = /^[A-Za-z0-9._:-]+::1220[0-9a-f]{64}$/i;
 
 function parseRecipientAliasMap(): Record<string, string> {
-  if (!RECIPIENT_ALIAS_MAP_RAW.trim()) return {};
+  if (!RECIPIENT_ALIAS_MAP_RAW.trim()) return DEFAULT_RECIPIENT_ALIAS_MAP;
   try {
     const parsed = JSON.parse(RECIPIENT_ALIAS_MAP_RAW);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    return Object.fromEntries(
-      Object.entries(parsed).filter(
-        ([from, to]) =>
-          typeof from === "string" &&
-          from.trim().length > 0 &&
-          typeof to === "string" &&
-          to.trim().length > 0
-      )
-    ) as Record<string, string>;
+    return {
+      ...DEFAULT_RECIPIENT_ALIAS_MAP,
+      ...Object.fromEntries(
+        Object.entries(parsed).filter(
+          ([from, to]) =>
+            typeof from === "string" &&
+            from.trim().length > 0 &&
+            typeof to === "string" &&
+            to.trim().length > 0
+        )
+      ) as Record<string, string>,
+    };
   } catch {
-    return {};
+    return DEFAULT_RECIPIENT_ALIAS_MAP;
   }
 }
 
@@ -47,11 +82,14 @@ const RECIPIENT_ALIAS_MAP = parseRecipientAliasMap();
 function resolveRequestedParty(rawParty: string | string[] | undefined): string {
   const candidate = Array.isArray(rawParty) ? rawParty[0] : rawParty;
   if (!candidate || !candidate.trim()) return CANTON_PARTY;
-  const party = candidate.trim();
-  if (party.length > 200 || !CANTON_PARTY_PATTERN.test(party)) {
+  const raw = candidate.trim();
+  if (raw.length > 200) throw new Error("Invalid Canton party");
+  // Resolve aliases first (bare party hints like "minted-user-33f97321" lack ::1220 suffix)
+  const party = RECIPIENT_ALIAS_MAP[raw] || raw;
+  if (!CANTON_PARTY_PATTERN.test(party)) {
     throw new Error("Invalid Canton party");
   }
-  return RECIPIENT_ALIAS_MAP[party] || party;
+  return party;
 }
 
 interface CantonMUSDToken {
@@ -62,6 +100,7 @@ interface CantonMUSDToken {
   sourceChain: number;
   ethTxHash: string;
   createdAt: string;
+  template: "CantonMUSD" | "CIP56MintedMUSD";
 }
 
 interface BridgeServiceInfo {
@@ -149,6 +188,9 @@ interface BalancesResponse {
   tokens: CantonMUSDToken[];
   totalBalance: string;
   tokenCount: number;
+  redeemableBalance: string;
+  redeemableTokenCount: number;
+  cip56Balance: string;
   bridgeService: BridgeServiceInfo | null;
   pendingBridgeIns: number;
   supplyService: boolean;
@@ -287,26 +329,38 @@ export default async function handler(
     const { offset } = await cantonRequest<{ offset: number }>("GET", "/v2/state/ledger-end");
 
     // 2. Query template-scoped slices to avoid wildcard ACS 413 at 200-element node cap.
-    const templates = [
-      templateId("CantonDirectMint", "CantonMUSD"),
-      templateId("Minted.Protocol.V3", "BridgeService"),
-      templateId("Minted.Protocol.V3", "BridgeInRequest"),
-      templateId("Minted.Protocol.V3", "MUSDSupplyService"),
-      templateId("CantonSMUSD", "CantonStakingService"),
-      templateId("CantonETHPool", "CantonETHPoolService"),
-      templateId("CantonBoostPool", "CantonBoostPoolService"),
-      templateId("CantonLending", "CantonLendingService"),
-      templateId("CantonLending", "CantonPriceFeed"),
-      templateId("CantonETHPool", "CantonSMUSD_E"),
-      templateId("CantonBoostPool", "BoostPoolLP"),
-      templateId("CantonLending", "EscrowedCollateral"),
-      templateId("CantonLending", "CantonDebtPosition"),
-      templateId("CantonDirectMint", "CantonDirectMintService"),
-      templateId("CantonSMUSD", "CantonSMUSD"),
-      templateId("CantonCoinToken", "CantonCoin"),
-      templateId("CantonDirectMint", "CantonUSDC"),
-      templateId("CantonDirectMint", "USDCx"),
+    // Token templates are package-pinned; service templates fan out across all known V3 packages
+    // so we discover contracts even if they were created under a different package version.
+    const serviceModuleEntities = [
+      ["Minted.Protocol.V3", "BridgeService"],
+      ["Minted.Protocol.V3", "BridgeInRequest"],
+      ["Minted.Protocol.V3", "MUSDSupplyService"],
+      ["CantonSMUSD", "CantonStakingService"],
+      ["CantonETHPool", "CantonETHPoolService"],
+      ["CantonBoostPool", "CantonBoostPoolService"],
+      ["CantonLending", "CantonLendingService"],
+      ["CantonLending", "CantonPriceFeed"],
+      ["CantonETHPool", "CantonSMUSD_E"],
+      ["CantonBoostPool", "BoostPoolLP"],
+      ["CantonLending", "EscrowedCollateral"],
+      ["CantonLending", "CantonDebtPosition"],
+      ["CantonDirectMint", "CantonDirectMintService"],
+      ["CantonSMUSD", "CantonSMUSD"],
+      ["CantonCoinToken", "CantonCoin"],
+      ["CantonDirectMint", "CantonUSDC"],
+      ["CantonDirectMint", "USDCx"],
+      ["CantonDirectMint", "CantonMUSD"],
     ] as const;
+
+    // Fan out service templates across all known V3 package IDs
+    const serviceTemplates = serviceModuleEntities.flatMap(([mod, entity]) =>
+      V3_PACKAGE_IDS.map((pkg) => `${pkg}:${mod}:${entity}`)
+    );
+
+    const templates = [
+      `${CIP56_PACKAGE_ID}:CIP56Interfaces:CIP56MintedMUSD`,
+      ...serviceTemplates,
+    ];
 
     const entryGroups = await Promise.all(
       templates.map((tpl) => queryTemplateEntries(actAsParty, offset, tpl))
@@ -364,6 +418,20 @@ export default async function handler(
           sourceChain: parseInt(String(p.sourceChain || "0"), 10),
           ethTxHash: (p.ethTxHash as string) || "",
           createdAt: evt.createdAt || "",
+          template: "CantonMUSD",
+        });
+      } else if (entityName === "CIP56MintedMUSD") {
+        const p = evt.createArgument;
+        if (!matchesActingOwner(p, "owner")) continue;
+        tokens.push({
+          contractId: evt.contractId,
+          owner: (p.owner as string) || "",
+          amount: (p.amount as string) || "0",
+          nonce: 0,
+          sourceChain: 0,
+          ethTxHash: "",
+          createdAt: evt.createdAt || "",
+          template: "CIP56MintedMUSD",
         });
       } else if (entityName === "BridgeService") {
         const p = evt.createArgument;
@@ -754,6 +822,13 @@ export default async function handler(
       .reduce((sum, t) => sum + parseFloat(t.amount), 0)
       .toFixed(6);
 
+    // Derived balance breakdown by token template
+    const redeemableTokens = tokens.filter((t) => t.template === "CantonMUSD");
+    const cip56Tokens = tokens.filter((t) => t.template === "CIP56MintedMUSD");
+    const redeemableBalance = redeemableTokens.reduce((s, t) => s + parseFloat(t.amount), 0).toFixed(6);
+    const redeemableTokenCount = redeemableTokens.length;
+    const cip56Balance = cip56Tokens.reduce((s, t) => s + parseFloat(t.amount), 0).toFixed(6);
+
     // Sum token balances for non-mUSD tokens
     const totalSmusd = smusdTokens.reduce((s, t) => s + parseFloat(t.amount), 0).toFixed(6);
     const totalSmusdE = smusdETokens.reduce((s, t) => s + parseFloat(t.amount), 0).toFixed(6);
@@ -765,6 +840,9 @@ export default async function handler(
       tokens,
       totalBalance,
       tokenCount: tokens.length,
+      redeemableBalance,
+      redeemableTokenCount,
+      cip56Balance,
       bridgeService,
       pendingBridgeIns,
       supplyService,

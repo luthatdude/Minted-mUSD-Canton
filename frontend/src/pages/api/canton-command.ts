@@ -21,7 +21,7 @@ const CANTON_BASE_URL =
 const CANTON_TOKEN = process.env.CANTON_TOKEN || "dummy-no-auth";
 const CANTON_PARTY =
   process.env.CANTON_PARTY ||
-  "minted-validator-1::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
+  "sv::122006df00c631440327e68ba87f61795bbcd67db26142e580137e5038649f22edce";
 const RECIPIENT_ALIAS_MAP_RAW = process.env.CANTON_RECIPIENT_PARTY_ALIASES || "";
 const CANTON_PARTY_PATTERN = /^[A-Za-z0-9._:-]+::1220[0-9a-f]{64}$/i;
 const CANTON_USER = process.env.CANTON_USER || "administrator";
@@ -122,17 +122,26 @@ function shouldOperatorCosignCreate(
   resolvedTemplateId: string,
   payload: Record<string, unknown>,
   actAsParty: string
-): boolean {
+): string[] | false {
   // Devnet faucet mint flow: create operator-issued user-owned token contracts.
+  // When payload has issuer+owner and owner == requested party, actAs must
+  // include both the owner and the issuer so the Canton ledger accepts the
+  // multi-signatory create.
   const entityName = resolvedTemplateId.split(":").pop() || "";
-  const faucetEntities = new Set(["CantonCoin", "CantonUSDC", "USDCx"]);
+  const faucetEntities = new Set(["CantonCoin", "CantonUSDC", "USDCx", "CantonMUSD"]);
   if (!faucetEntities.has(entityName)) return false;
 
   const issuer = typeof payload.issuer === "string" ? payload.issuer : "";
   const owner = typeof payload.owner === "string" ? payload.owner : "";
   if (!issuer || !owner) return false;
 
-  return issuer === CANTON_PARTY && owner === actAsParty && actAsParty !== CANTON_PARTY;
+  // Owner must be the requesting party
+  if (owner !== actAsParty) return false;
+  // Issuer must be the operator (or at least a different party that we can act as)
+  if (issuer === actAsParty) return false;
+
+  // Return deduplicated actAs list: [owner, issuer, CANTON_PARTY]
+  return Array.from(new Set([actAsParty, issuer, CANTON_PARTY]));
 }
 
 async function cantonRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -193,9 +202,22 @@ export default async function handler(
       }
 
       const createPayload = payload as Record<string, unknown>;
-      const createActAs = shouldOperatorCosignCreate(resolvedTemplateId, createPayload, actAsParty)
-        ? Array.from(new Set([actAsParty, CANTON_PARTY]))
-        : [actAsParty];
+
+      // Normalize faucet create payloads: ensure issuer = CANTON_PARTY,
+      // owner = actAsParty, and default observer lists to [].
+      const entityName = resolvedTemplateId.split(":").pop() || "";
+      const faucetEntities = new Set(["CantonCoin", "CantonUSDC", "USDCx", "CantonMUSD"]);
+      if (faucetEntities.has(entityName)) {
+        if (typeof createPayload.issuer === "string") createPayload.issuer = CANTON_PARTY;
+        if (typeof createPayload.owner === "string") createPayload.owner = actAsParty;
+        // Only default observer lists if already present in payload
+        if ("privacyObservers" in createPayload && !Array.isArray(createPayload.privacyObservers)) {
+          createPayload.privacyObservers = [];
+        }
+      }
+
+      const cosignParties = shouldOperatorCosignCreate(resolvedTemplateId, createPayload, actAsParty);
+      const createActAs = cosignParties || [actAsParty];
       const createReadAs = Array.from(new Set([...baseReadAsParties, ...createActAs]));
 
       const body = {

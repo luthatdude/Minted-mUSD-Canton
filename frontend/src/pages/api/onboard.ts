@@ -70,7 +70,7 @@ const CANTON_ADMIN_URL =
 const CANTON_ADMIN_TOKEN = process.env.CANTON_ADMIN_TOKEN || "";
 const CANTON_OPERATOR_PARTY =
   process.env.CANTON_PARTY ||
-  "minted-validator-1::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
+  "sv::122006df00c631440327e68ba87f61795bbcd67db26142e580137e5038649f22edce";
 
 function partyHintFromEth(ethAddress: string): string {
   return `minted-user-${ethAddress.toLowerCase().slice(2, 10)}`;
@@ -99,7 +99,7 @@ async function findPartyByHint(partyHint: string): Promise<string | null> {
 
 function getLocalPartyNamespace(): string {
   const fallback =
-    "minted-validator-1::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
+    "sv::122006df00c631440327e68ba87f61795bbcd67db26142e580137e5038649f22edce";
   const party = process.env.CANTON_PARTY || fallback;
   const ns = party.split("::")[1];
   // Namespace should be 1220 + 64 hex chars.
