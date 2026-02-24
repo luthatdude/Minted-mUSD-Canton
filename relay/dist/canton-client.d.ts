@@ -129,6 +129,7 @@ export declare function parseTemplateId(qualified: string): TemplateId;
 /** Well-known template IDs for Minted Protocol */
 export declare const TEMPLATES: {
     readonly AttestationRequest: TemplateId;
+    readonly SignedAttestation: TemplateId;
     readonly ValidatorSignature: TemplateId;
     readonly BridgeService: TemplateId;
     readonly BridgeOutRequest: TemplateId;
@@ -136,6 +137,7 @@ export declare const TEMPLATES: {
     readonly MUSDSupplyService: TemplateId;
     readonly ComplianceRegistry: TemplateId;
     readonly StandaloneBridgeOutRequest: TemplateId;
+    readonly CantonDirectMintService: TemplateId;
     readonly RedemptionRequest: TemplateId;
     readonly RedemptionEthereumSettlement: TemplateId;
     readonly CantonUSDC: TemplateId;
@@ -143,5 +145,16 @@ export declare const TEMPLATES: {
     readonly CantonMUSDTransferProposal: TemplateId;
     readonly CantonStakingService: TemplateId;
     readonly CantonETHPoolService: TemplateId;
+    readonly CIP56MintedMUSD: TemplateId;
+    readonly MUSDTransferFactory: TemplateId;
+    readonly MUSDTransferInstruction: TemplateId;
+    readonly MUSDAllocationFactory: TemplateId;
+    readonly MUSDAllocation: TemplateId;
+};
+export declare const CIP56_INTERFACES: {
+    /** TransferFactory interface — for TransferFactory_Transfer choice */
+    readonly TransferFactory: TemplateId;
+    /** TransferInstruction interface — for TransferInstruction_Accept/Reject/Withdraw */
+    readonly TransferInstruction: TemplateId;
 };
 //# sourceMappingURL=canton-client.d.ts.map

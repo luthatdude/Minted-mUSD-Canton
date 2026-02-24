@@ -433,3 +433,29 @@ export const TEMPLATES = {
   MUSDAllocationFactory:      { moduleName: "CIP56Interfaces", entityName: "MUSDAllocationFactory", ...(process.env.CIP56_PACKAGE_ID ? { packageId: process.env.CIP56_PACKAGE_ID } : {}) } as TemplateId,
   MUSDAllocation:             { moduleName: "CIP56Interfaces", entityName: "MUSDAllocation", ...(process.env.CIP56_PACKAGE_ID ? { packageId: process.env.CIP56_PACKAGE_ID } : {}) } as TemplateId,
 } as const;
+
+/**
+ * CIP-56 Splice interface IDs for exercising interface-defined choices.
+ * Canton JSON API v2 requires the INTERFACE template ID (not the concrete
+ * template) when exercising a choice defined on a Daml interface.
+ * Pass these as the `templateId` argument to `exerciseChoice`.
+ *
+ * Package ID is from splice-api-token-transfer-instruction-v1 DAR
+ * (bundled in ble-protocol-cip56-1.0.0.dar as a data-dependency).
+ */
+const SPLICE_TRANSFER_INSTRUCTION_PKG = "55ba4deb0ad4662c4168b39859738a0e91388d252286480c7331b3f71a517281";
+
+export const CIP56_INTERFACES = {
+  /** TransferFactory interface — for TransferFactory_Transfer choice */
+  TransferFactory: {
+    packageId: SPLICE_TRANSFER_INSTRUCTION_PKG,
+    moduleName: "Splice.Api.Token.TransferInstructionV1",
+    entityName: "TransferFactory",
+  } as TemplateId,
+  /** TransferInstruction interface — for TransferInstruction_Accept/Reject/Withdraw */
+  TransferInstruction: {
+    packageId: SPLICE_TRANSFER_INSTRUCTION_PKG,
+    moduleName: "Splice.Api.Token.TransferInstructionV1",
+    entityName: "TransferInstruction",
+  } as TemplateId,
+} as const;

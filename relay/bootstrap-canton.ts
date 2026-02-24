@@ -70,7 +70,8 @@ async function bootstrap() {
         minValidators: 1,                  // Canton v2 JSON API: Optional Int encodes as just the value (or null)
         totalBridgedIn: "0.0",
         totalBridgedOut: "0.0",
-        lastNonce: 0,                      // Old schema on Canton (pre-CRIT-05)
+        lastBridgeOutNonce: 0,             // CRIT-05: Separate nonce for Canton→ETH
+        lastBridgeInNonce: 0,              // CRIT-05: Separate nonce for ETH→Canton
         paused: false,
         observers: [cantonParty],
       });

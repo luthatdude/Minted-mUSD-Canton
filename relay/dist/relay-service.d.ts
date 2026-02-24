@@ -44,6 +44,13 @@ interface RelayConfig {
     replayLookbackBlocks: number;
     maxRedemptionEthPayoutWei: bigint;
     autoGrantBridgeRoleForRedemptions: boolean;
+    bootstrapLedgerContracts: boolean;
+    cantonRegulatorParty: string;
+    cantonDirectMintServiceName: string;
+    cantonUsdcIssuer: string;
+    cantonUsdcxIssuer: string;
+    cantonMpaHash: string;
+    cantonMpaUri: string;
 }
 declare class RelayService {
     private config;
@@ -64,12 +71,22 @@ declare class RelayService {
     private processedETHPoolYieldEpochs;
     private lastETHPoolYieldScannedBlock;
     private processedRedemptionRequests;
+    private cip56TransferFactoryCid;
+    private cip56FactoryLastChecked;
+    private static readonly CIP56_FACTORY_REFRESH_MS;
     private static readonly ATTESTATION_TTL_SECONDS;
     private static readonly MAX_TIMESTAMP_DRIFT_SECONDS;
     private fallbackProviders;
     private activeProviderIndex;
     private consecutiveFailures;
     private readonly MAX_CONSECUTIVE_FAILURES;
+    private static readonly DIRECTION_NAMES;
+    private static readonly MAX_DIRECTION_FAILURES;
+    private static readonly DEGRADED_POLL_INTERVAL;
+    private static readonly FAILED_POLL_INTERVAL;
+    private static readonly ORPHAN_RECOVERY_INTERVAL;
+    private directionHealth;
+    private pollCycleCount;
     private rateLimiter;
     private anomalyDetector;
     private submittedNonces;
@@ -82,6 +99,15 @@ declare class RelayService {
     private warnedRedemptionMarkerUnavailable;
     private static readonly DIAGNOSTIC_LOG_INTERVAL_MS;
     constructor(config: RelayConfig);
+    private cantonBaseUrl;
+    private createCantonClientForParty;
+    /**
+     * Ensure required bootstrap contracts exist on Canton.
+     * Safe to call every startup; creation is query-first and idempotent.
+     */
+    private ensureLedgerContracts;
+    private ensureComplianceRegistry;
+    private ensureDirectMintService;
     /**
      * Initialize Ethereum signer (KMS or raw key)
      * Must be called before start()
@@ -89,7 +115,7 @@ declare class RelayService {
     initSigner(): Promise<void>;
     /**
      * Shape of the persisted relay state file.
-     * Stores processed epoch/attestation IDs and last scanned block numbers
+     * Stores processed IDs and last scanned block numbers
      * so the relay can survive restarts without re-processing events.
      */
     private static readonly STATE_VERSION;
@@ -125,6 +151,10 @@ declare class RelayService {
     stop(): void;
     /** Sync in-memory relay state into exported Prometheus gauges. */
     private updateMetricsSnapshot;
+    private shouldPollDirection;
+    private isPermanentDirectionError;
+    private recordDirectionFailure;
+    private recordDirectionSuccess;
     /**
      * Check if a transaction is allowed under rate limits.
      * Returns true if allowed, false if rate-limited.
@@ -194,6 +224,10 @@ declare class RelayService {
     /**
      * Load bridge-out request IDs that have already been relayed to Canton
      */
+    private buildBridgeInRequestDedupKey;
+    private parseBridgeInRequestDedupKeyFromPayload;
+    private buildBridgeInRequestDedupIndex;
+    private buildBridgeInRequestCandidateKeys;
     private loadProcessedBridgeOuts;
     /**
      * Watch Ethereum for BridgeToCantonRequested events and relay to Canton.
@@ -217,12 +251,15 @@ declare class RelayService {
      * @param amountStr   mUSD amount as a string (e.g., "50.0")
      * @param userParty   Canton party to own the minted CantonMUSD
      */
+    private refreshCip56FactoryCid;
     private completeBridgeInAndMintMusd;
     /**
      * Process any pending BridgeInRequests that haven't been completed yet.
      * Called on startup to catch up on any missed completions.
      */
     private processPendingBridgeInRequests;
+    private resolveRecipientFromEthereumNonce;
+    private recoverOrphanedMusd;
     /**
      * Load already-processed yield epochs from chain to prevent replay on restart.
      */
@@ -300,6 +337,8 @@ declare class RelayService {
      * If configured and possible, self-grants BRIDGE_ROLE.
      */
     private ensureBridgeRoleForRedemptionPayouts;
+    private getMusdCapState;
+    private decodeMusdMintError;
     /**
      * Settle pending RedemptionRequests by minting mUSD on Ethereum.
      * Requests remain pending on Canton; idempotency is enforced by local persistence.

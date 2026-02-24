@@ -32,7 +32,7 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 import { ethers } from "ethers";
-import { CantonClient, CantonApiError, ActiveContract, TEMPLATES } from "./canton-client";
+import { CantonClient, CantonApiError, ActiveContract, TEMPLATES, CIP56_INTERFACES } from "./canton-client";
 import { formatKMSSignature, sortSignaturesBySignerAddress } from "./signer";
 import { validateCreatePayload, validateExerciseArgs, DamlValidationError } from "./daml-schema-validator";
 // Use shared readSecret utility
@@ -2215,12 +2215,13 @@ class RelayService {
           } catch (createErr: any) {
             const msg = createErr?.message || String(createErr || "");
             const usedExtended = createPayload === payloadWithValidators;
+            const isSchemaError = msg.includes("INVALID_ARGUMENT") || msg.includes("COMMAND_PREPROCESSING_FAILED");
             const hasUnexpectedExtendedFields =
-              msg.includes("INVALID_ARGUMENT") &&
+              isSchemaError &&
               (msg.includes("validators") || msg.includes("requiredSignatures") || msg.includes("requiredSignaturesvalidators"));
             const missingExtendedFields =
-              msg.includes("INVALID_ARGUMENT") &&
-              msg.includes("Missing fields") &&
+              isSchemaError &&
+              (msg.includes("Missing fields") || msg.includes("Missing non-optional field")) &&
               (msg.includes("validators") || msg.includes("requiredSignatures"));
 
             if (usedExtended && hasUnexpectedExtendedFields) {
@@ -2494,7 +2495,7 @@ class RelayService {
                 const now = new Date().toISOString();
                 const executeBefore = new Date(Date.now() + 3600_000).toISOString();
                 const transferResult = await this.canton.exerciseChoice(
-                  TEMPLATES.MUSDTransferFactory,
+                  CIP56_INTERFACES.TransferFactory,
                   this.cip56TransferFactoryCid!,
                   "TransferFactory_Transfer",
                   {
@@ -2507,11 +2508,11 @@ class RelayService {
                       requestedAt: now,
                       executeBefore,
                       inputHoldingCids: [holdingCid],
-                      meta: { values: [] },
+                      meta: { values: {} },
                     },
                     extraArgs: {
-                      choiceContext: { values: [] },
-                      meta: { values: [] },
+                      context: { values: {} },
+                      meta: { values: {} },
                     },
                   }
                 );
@@ -2520,16 +2521,26 @@ class RelayService {
                 // Auto-accept the CIP-56 TransferInstruction
                 if (this.config.autoAcceptMusdTransferProposals) {
                   try {
-                    const instrCid = this.extractCreatedContractId(transferResult, "MUSDTransferInstruction");
+                    let instrCid = this.extractCreatedContractId(transferResult, "MUSDTransferInstruction");
+                    if (!instrCid) {
+                      // Fallback: query for newly created TransferInstruction
+                      const instrContracts = await this.canton.queryContracts(
+                        TEMPLATES.MUSDTransferInstruction,
+                        (p: any) => p.transfer?.receiver === userParty && p.admin === this.config.cantonParty
+                      ).catch(() => []);
+                      if (instrContracts.length > 0) {
+                        instrCid = instrContracts[instrContracts.length - 1].contractId;
+                      }
+                    }
                     if (instrCid) {
                       await this.canton.exerciseChoice(
-                        TEMPLATES.MUSDTransferInstruction,
+                        CIP56_INTERFACES.TransferInstruction,
                         instrCid,
                         "TransferInstruction_Accept",
                         {
                           extraArgs: {
-                            choiceContext: { values: [] },
-                            meta: { values: [] },
+                            context: { values: {} },
+                            meta: { values: {} },
                           },
                         },
                         [userParty]
@@ -2723,7 +2734,7 @@ class RelayService {
                   positionCids: [],
                   collectedSignatures: req.payload.validators,  // All validators attest (operator-controlled)
                   ecdsaSignatures: [],
-                  requiredSignatures: req.payload.requiredSignatures,
+                  requiredSignatures: Number(req.payload.requiredSignatures) || 1,
                   direction: "EthereumToCanton",
               };
               validateCreatePayload("AttestationRequest", attestPayload);
@@ -3054,7 +3065,7 @@ class RelayService {
           const now = new Date().toISOString();
           const executeBefore = new Date(Date.now() + 3600_000).toISOString();
           const transferResult = await this.canton.exerciseChoice(
-            TEMPLATES.MUSDTransferFactory,
+            CIP56_INTERFACES.TransferFactory,
             this.cip56TransferFactoryCid!,
             "TransferFactory_Transfer",
             {
@@ -3067,36 +3078,56 @@ class RelayService {
                 requestedAt: now,
                 executeBefore,
                 inputHoldingCids: [orphan.contractId],
-                meta: { values: [] },
+                meta: { values: {} },
               },
               extraArgs: {
-                choiceContext: { values: [] },
-                meta: { values: [] },
+                context: { values: {} },
+                meta: { values: {} },
               },
             }
           );
 
+          // Track actual delivery: only count success when mUSD reaches the user
+          let delivered = !this.config.autoAcceptMusdTransferProposals;
+
           if (this.config.autoAcceptMusdTransferProposals) {
-            const instrCid = this.extractCreatedContractId(transferResult, "MUSDTransferInstruction");
+            let instrCid = this.extractCreatedContractId(transferResult, "MUSDTransferInstruction");
+            if (!instrCid) {
+              const instrContracts = await this.canton.queryContracts(
+                TEMPLATES.MUSDTransferInstruction,
+                (p: any) => p.transfer?.receiver === orphanUser && p.admin === this.config.cantonParty
+              ).catch(() => []);
+              if (instrContracts.length > 0) {
+                instrCid = instrContracts[instrContracts.length - 1].contractId;
+              }
+            }
             if (instrCid) {
               await this.canton.exerciseChoice(
-                TEMPLATES.MUSDTransferInstruction,
+                CIP56_INTERFACES.TransferInstruction,
                 instrCid,
                 "TransferInstruction_Accept",
                 {
                   extraArgs: {
-                    choiceContext: { values: [] },
-                    meta: { values: [] },
+                    context: { values: {} },
+                    meta: { values: {} },
                   },
                 },
                 [orphanUser]
               );
+              delivered = true;
+            } else {
+              console.warn(`[Relay] CIP-56 orphan recovery: TransferInstruction CID not found for #${orphanNonce}; user must accept via wallet`);
             }
           }
 
-          cip56Recovered++;
-          orphanRecoveryTotal.labels("success").inc();
-          console.log(`[Relay] CIP-56 orphan recovery: bridge #${orphanNonce} → ${orphanUser.slice(0, 36)}...`);
+          if (delivered) {
+            cip56Recovered++;
+            orphanRecoveryTotal.labels("success").inc();
+            console.log(`[Relay] CIP-56 orphan recovery: bridge #${orphanNonce} → ${orphanUser.slice(0, 36)}...`);
+          } else {
+            orphanRecoveryTotal.labels("skipped").inc();
+            console.warn(`[Relay] CIP-56 orphan recovery incomplete for #${orphanNonce}: TransferFactory_Transfer succeeded but delivery pending`);
+          }
         } catch (error: any) {
           orphanRecoveryTotal.labels("error").inc();
           console.warn(`[Relay] CIP-56 orphan recovery failed for nonce #${orphanNonce}: ${error?.message || error}`);

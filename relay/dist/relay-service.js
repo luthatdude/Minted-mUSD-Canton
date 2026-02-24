@@ -187,6 +187,18 @@ const DEFAULT_CONFIG = {
         }
         return process.env.NODE_ENV !== "production";
     })(),
+    bootstrapLedgerContracts: (() => {
+        if (process.env.CANTON_BOOTSTRAP_ENABLED) {
+            return process.env.CANTON_BOOTSTRAP_ENABLED === "true";
+        }
+        return process.env.NODE_ENV !== "production";
+    })(),
+    cantonRegulatorParty: process.env.CANTON_REGULATOR_PARTY || "",
+    cantonDirectMintServiceName: process.env.CANTON_DIRECT_MINT_SERVICE_NAME || "CantonDirectMint",
+    cantonUsdcIssuer: process.env.CANTON_USDC_ISSUER || process.env.CANTON_PARTY || "",
+    cantonUsdcxIssuer: process.env.CANTON_USDCX_ISSUER || process.env.CANTON_PARTY || "",
+    cantonMpaHash: process.env.CANTON_MPA_HASH || "minted:default-mpa:v1",
+    cantonMpaUri: process.env.CANTON_MPA_URI || "https://minted.protocol/legal/mpa-v1",
 };
 // ============================================================
 //                     BLEBridgeV9 ABI (partial)
@@ -395,6 +407,11 @@ class RelayService {
     lastETHPoolYieldScannedBlock = 0;
     // Canton redemption -> Ethereum payout tracking (idempotency across restarts)
     processedRedemptionRequests = new Set();
+    // CIP-56: Cached transfer factory contract ID (null = not deployed, use legacy)
+    cip56TransferFactoryCid = null;
+    // C1: Periodic re-query to detect factory redeployment without relay restart
+    cip56FactoryLastChecked = 0;
+    static CIP56_FACTORY_REFRESH_MS = 5 * 60 * 1000; // 5 minutes
     // BRIDGE-M-05: Named constant for the expiry-to-timestamp offset.
     // The DAML attestation carries an `expiresAt` timestamp (when the attestation becomes invalid).
     // The Solidity contract expects a `timestamp` representing when the attestation was *created*.
@@ -509,6 +526,155 @@ class RelayService {
         }
         if (config.autoAcceptMusdTransferProposals) {
             console.log("[Relay] Auto-accept of CantonMUSD transfer proposals is ENABLED");
+        }
+    }
+    cantonBaseUrl() {
+        const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
+        return `${protocol}://${this.config.cantonHost}:${this.config.cantonPort}`;
+    }
+    createCantonClientForParty(party, readAs = []) {
+        return new canton_client_1.CantonClient({
+            baseUrl: this.cantonBaseUrl(),
+            token: this.config.cantonToken,
+            userId: process.env.CANTON_USER_ID || "administrator",
+            actAs: party,
+            readAs,
+            timeoutMs: 30000,
+            defaultPackageId: process.env.CANTON_PACKAGE_ID || "",
+        });
+    }
+    /**
+     * Ensure required bootstrap contracts exist on Canton.
+     * Safe to call every startup; creation is query-first and idempotent.
+     */
+    async ensureLedgerContracts() {
+        if (!this.config.bootstrapLedgerContracts) {
+            console.log("[Relay] Canton bootstrap disabled (CANTON_BOOTSTRAP_ENABLED=false)");
+            return;
+        }
+        let complianceCid = await this.ensureComplianceRegistry();
+        // Re-query in case registry already existed but was invisible during create race.
+        if (!complianceCid) {
+            try {
+                const existing = await this.canton.queryContracts(canton_client_1.TEMPLATES.ComplianceRegistry, (p) => p.operator === this.config.cantonParty);
+                if (existing.length > 0) {
+                    complianceCid = existing[0].contractId;
+                }
+            }
+            catch {
+                // Best-effort only.
+            }
+        }
+        await this.ensureDirectMintService(complianceCid);
+    }
+    async ensureComplianceRegistry() {
+        try {
+            const existing = await this.canton.queryContracts(canton_client_1.TEMPLATES.ComplianceRegistry, (p) => p.operator === this.config.cantonParty);
+            if (existing.length > 0) {
+                console.log(`[Relay] ComplianceRegistry present (${existing[0].contractId.slice(0, 16)}...)`);
+                return existing[0].contractId;
+            }
+        }
+        catch (err) {
+            console.warn(`[Relay] ComplianceRegistry pre-check failed: ${err?.message?.slice(0, 120)}`);
+        }
+        const regulator = this.config.cantonRegulatorParty;
+        if (!regulator) {
+            console.warn("[Relay] Cannot bootstrap ComplianceRegistry: CANTON_REGULATOR_PARTY not set");
+            return null;
+        }
+        if (regulator === this.config.cantonParty) {
+            console.warn("[Relay] Cannot bootstrap ComplianceRegistry: regulator must differ from operator");
+            return null;
+        }
+        try {
+            const regulatorClient = this.createCantonClientForParty(regulator, [this.config.cantonParty]);
+            const payload = {
+                regulator,
+                operator: this.config.cantonParty,
+                blacklisted: { map: [] },
+                frozen: { map: [] },
+                lastUpdated: new Date().toISOString(),
+            };
+            await regulatorClient.createContract(canton_client_1.TEMPLATES.ComplianceRegistry, payload);
+            const created = await this.canton.queryContracts(canton_client_1.TEMPLATES.ComplianceRegistry, (p) => p.operator === this.config.cantonParty);
+            if (created.length === 0) {
+                console.warn("[Relay] ComplianceRegistry create submitted but contract not found in ACS");
+                return null;
+            }
+            console.log(`[Relay] ✅ Bootstrapped ComplianceRegistry (${created[0].contractId.slice(0, 16)}...)`);
+            return created[0].contractId;
+        }
+        catch (err) {
+            console.warn(`[Relay] ComplianceRegistry bootstrap failed: ${err?.message?.slice(0, 160)}`);
+            return null;
+        }
+    }
+    async ensureDirectMintService(complianceCid) {
+        try {
+            const existing = await this.canton.queryContracts(canton_client_1.TEMPLATES.CantonDirectMintService, (p) => p.operator === this.config.cantonParty);
+            if (existing.length > 0) {
+                console.log(`[Relay] CantonDirectMintService present (${existing[0].contractId.slice(0, 16)}...)`);
+                return;
+            }
+        }
+        catch (err) {
+            console.warn(`[Relay] CantonDirectMintService pre-check failed: ${err?.message?.slice(0, 120)}`);
+        }
+        if (!complianceCid) {
+            console.warn("[Relay] Skipping CantonDirectMintService bootstrap: ComplianceRegistry missing");
+            return;
+        }
+        let chainId = 1;
+        try {
+            chainId = Number((await this.provider.getNetwork()).chainId);
+        }
+        catch {
+            // Keep default for bootstrap fallback.
+        }
+        const validatorParties = Object.keys(this.config.validatorAddresses);
+        if (validatorParties.length === 0) {
+            validatorParties.push(this.config.cantonParty);
+        }
+        const payload = {
+            operator: this.config.cantonParty,
+            usdcIssuer: this.config.cantonUsdcIssuer || this.config.cantonParty,
+            usdcxIssuer: this.config.cantonUsdcxIssuer || null,
+            mintFeeBps: 30,
+            redeemFeeBps: 30,
+            minAmount: "1.0",
+            maxAmount: "1000000.0",
+            supplyCap: "10000000.0",
+            currentSupply: "0.0",
+            accumulatedFees: "0.0",
+            paused: false,
+            validators: validatorParties,
+            targetChainId: chainId,
+            targetTreasury: this.config.treasuryAddress,
+            nextNonce: 1,
+            dailyMintLimit: "5000000.0",
+            dailyMinted: "0.0",
+            dailyBurned: "0.0",
+            lastRateLimitReset: new Date().toISOString(),
+            complianceRegistryCid: complianceCid,
+            mpaHash: this.config.cantonMpaHash,
+            mpaUri: this.config.cantonMpaUri,
+            authorizedMinters: [],
+            cantonCoinPrice: null,
+            serviceName: this.config.cantonDirectMintServiceName,
+        };
+        try {
+            await this.canton.createContract(canton_client_1.TEMPLATES.CantonDirectMintService, payload);
+            const created = await this.canton.queryContracts(canton_client_1.TEMPLATES.CantonDirectMintService, (p) => p.operator === this.config.cantonParty);
+            if (created.length > 0) {
+                console.log(`[Relay] ✅ Bootstrapped CantonDirectMintService (${created[0].contractId.slice(0, 16)}...)`);
+            }
+            else {
+                console.warn("[Relay] CantonDirectMintService create submitted but contract not found in ACS");
+            }
+        }
+        catch (err) {
+            console.warn(`[Relay] CantonDirectMintService bootstrap failed: ${err?.message?.slice(0, 160)}`);
         }
     }
     /**
@@ -677,6 +843,30 @@ class RelayService {
         await this.initSigner();
         // Validate validator addresses against on-chain roles before starting
         await this.validateValidatorAddresses();
+        // Ensure baseline Canton contracts exist (idempotent, query-first).
+        await this.ensureLedgerContracts();
+        // CIP-56: Detect if TransferFactory is deployed and cache for dual-path routing
+        try {
+            const cip56Factories = await this.canton.queryContracts(canton_client_1.TEMPLATES.MUSDTransferFactory, (p) => true);
+            if (cip56Factories.length > 0) {
+                if (!process.env.CIP56_PACKAGE_ID) {
+                    console.warn("[Relay] CIP-56 MUSDTransferFactory found on ledger but CIP56_PACKAGE_ID env var is NOT set. " +
+                        "CIP-56 path DISABLED — creates/exercises would target the wrong package. " +
+                        "Set CIP56_PACKAGE_ID to the ble-protocol-cip56 DAR package ID to enable.");
+                }
+                else {
+                    this.cip56TransferFactoryCid = cip56Factories[0].contractId;
+                    this.cip56FactoryLastChecked = Date.now(); // C1: seed refresh timer
+                    console.log(`[Relay] CIP-56 MUSDTransferFactory detected (cid: ${this.cip56TransferFactoryCid.slice(0, 20)}...). CIP-56 transfers enabled.`);
+                }
+            }
+            else {
+                console.log("[Relay] CIP-56 MUSDTransferFactory not found. Using legacy CantonMUSD_Transfer flow.");
+            }
+        }
+        catch {
+            console.log("[Relay] CIP-56 factory detection skipped (query failed). Using legacy flow.");
+        }
         this.isRunning = true;
         // MEDIUM-02: Load persisted state from disk BEFORE chain scanning.
         // Persisted state provides a baseline; chain scanning then adds any
@@ -879,7 +1069,12 @@ class RelayService {
         if (!error)
             return false;
         if (error instanceof canton_client_1.CantonApiError) {
-            return !error.isRetryable();
+            const apiError = error;
+            if (typeof apiError.isRetryable === "function") {
+                return !apiError.isRetryable();
+            }
+            // Backward compatibility for branches where CantonApiError has no helper methods.
+            return ![429, 500, 502, 503, 504].includes(apiError.status);
         }
         const message = String(error?.message || error);
         return (message.includes("Canton API error 413") ||
@@ -1485,7 +1680,7 @@ class RelayService {
                     // Validate mapped value from config before use.
                     (0, utils_1.validateCantonPartyId)(resolvedRecipient, `CANTON_RECIPIENT_PARTY_ALIASES mapped recipient for bridge-out #${nonce}`);
                 }
-                const payload = {
+                const basePayload = {
                     operator: this.config.cantonParty,
                     user: resolvedRecipient,
                     amount: ethers_1.ethers.formatEther(amount),
@@ -1494,11 +1689,12 @@ class RelayService {
                     nonce: Number(nonce),
                     createdAt: new Date(Number(timestamp) * 1000).toISOString(),
                     status: "pending",
-                    // NOTE: The deployed DAML package does not include validators/requiredSignatures.
-                    // These fields exist in the local V3.daml source but have not been redeployed.
-                    // When the DAML package is recompiled and uploaded, re-enable these:
-                    // validators: Object.keys(this.config.validatorAddresses),
-                    // requiredSignatures: Math.max(1, Math.ceil(Object.keys(this.config.validatorAddresses).length / 2)),
+                };
+                const payloadWithValidators = {
+                    ...basePayload,
+                    // Attestation-enabled DAML variant fields.
+                    validators: Object.keys(this.config.validatorAddresses),
+                    requiredSignatures: Math.max(1, Math.ceil(Object.keys(this.config.validatorAddresses).length / 2)),
                 };
                 const candidateKeys = this.buildBridgeInRequestCandidateKeys(Number(nonce), amount, Number(timestamp), resolvedRecipient);
                 if (candidateKeys.some((key) => existingBridgeInDedupKeys.has(key))) {
@@ -1509,23 +1705,63 @@ class RelayService {
                     continue;
                 }
                 try {
-                    // Validate payload against DAML ensure constraints before submission
-                    (0, daml_schema_validator_1.validateCreatePayload)("BridgeInRequest", payload);
-                    // Create BridgeInRequest on Canton with the original user party
-                    await this.canton.createContract(canton_client_1.TEMPLATES.BridgeInRequest, payload);
+                    // Different environments can run different BridgeInRequest shapes.
+                    // Select a candidate payload based on local schema validation first,
+                    // then retry on Canton INVALID_ARGUMENT shape mismatch if needed.
+                    let createPayload = basePayload;
+                    try {
+                        (0, daml_schema_validator_1.validateCreatePayload)("BridgeInRequest", basePayload);
+                    }
+                    catch (schemaErr) {
+                        const msg = schemaErr?.message || String(schemaErr || "");
+                        if (msg.includes("validators") || msg.includes("requiredSignatures")) {
+                            createPayload = payloadWithValidators;
+                        }
+                        else {
+                            throw schemaErr;
+                        }
+                    }
+                    const tryCreate = async (p) => {
+                        await this.canton.createContract(canton_client_1.TEMPLATES.BridgeInRequest, p);
+                        return p;
+                    };
+                    let createdWith = createPayload;
+                    try {
+                        createdWith = await tryCreate(createPayload);
+                    }
+                    catch (createErr) {
+                        const msg = createErr?.message || String(createErr || "");
+                        const usedExtended = createPayload === payloadWithValidators;
+                        const isSchemaError = msg.includes("INVALID_ARGUMENT") || msg.includes("COMMAND_PREPROCESSING_FAILED");
+                        const hasUnexpectedExtendedFields = isSchemaError &&
+                            (msg.includes("validators") || msg.includes("requiredSignatures") || msg.includes("requiredSignaturesvalidators"));
+                        const missingExtendedFields = isSchemaError &&
+                            (msg.includes("Missing fields") || msg.includes("Missing non-optional field")) &&
+                            (msg.includes("validators") || msg.includes("requiredSignatures"));
+                        if (usedExtended && hasUnexpectedExtendedFields) {
+                            console.warn(`[Relay] BridgeInRequest extended fields not supported on Canton; retrying legacy payload for bridge-out #${nonce}`);
+                            createdWith = await tryCreate(basePayload);
+                        }
+                        else if (!usedExtended && missingExtendedFields) {
+                            console.warn(`[Relay] BridgeInRequest requires validator metadata; retrying extended payload for bridge-out #${nonce}`);
+                            createdWith = await tryCreate(payloadWithValidators);
+                        }
+                        else {
+                            throw createErr;
+                        }
+                    }
                     console.log(`[Relay] Created BridgeInRequest on Canton for bridge-out #${nonce}`);
-                    existingBridgeInDedupKeys.add(this.buildBridgeInRequestDedupKey(Number(nonce), amount, Number(timestamp), String(payload.user)));
+                    existingBridgeInDedupKeys.add(this.buildBridgeInRequestDedupKey(Number(nonce), amount, Number(timestamp), String(createdWith.user)));
                 }
                 catch (innerError) {
                     const errMsg = innerError?.message || "";
-                    // If user party is unknown on this participant, fallback to operator as user
+                    // If user party is unknown on this participant, defer this bridge-out
+                    // rather than minting to operator. This preserves user ownership semantics
+                    // and allows safe retry once the party is onboarded.
                     if (errMsg.includes("UNKNOWN_INFORMEES") || errMsg.includes("NO_SYNCHRONIZER") || errMsg.includes("PARTY_NOT_KNOWN")) {
-                        console.warn(`[Relay] User party not on this participant for bridge-out #${nonce}, using operator as user fallback`);
-                        payload.user = this.config.cantonParty;
-                        (0, daml_schema_validator_1.validateCreatePayload)("BridgeInRequest", payload);
-                        await this.canton.createContract(canton_client_1.TEMPLATES.BridgeInRequest, payload);
-                        console.log(`[Relay] Created BridgeInRequest (operator-as-user fallback) for bridge-out #${nonce}`);
-                        existingBridgeInDedupKeys.add(this.buildBridgeInRequestDedupKey(Number(nonce), amount, Number(timestamp), String(payload.user)));
+                        console.warn(`[Relay] User party not hosted on this participant for bridge-out #${nonce} (${resolvedRecipient}). ` +
+                            `Deferring until onboarding is complete.`);
+                        throw new Error(`USER_PARTY_NOT_HOSTED:${resolvedRecipient}`);
                     }
                     else {
                         throw innerError; // Re-throw non-party errors
@@ -1533,7 +1769,7 @@ class RelayService {
                 }
                 // Step 2: Exercise BridgeIn_Complete to mark as completed
                 // Then create CantonMUSD token for the user
-                await this.completeBridgeInAndMintMusd(Number(nonce), ethers_1.ethers.formatEther(amount), String(payload.user));
+                await this.completeBridgeInAndMintMusd(Number(nonce), ethers_1.ethers.formatEther(amount), String(resolvedRecipient));
                 // Mark as processed
                 this.processedBridgeOuts.add(requestId);
                 metrics_1.bridgeOutsTotal.labels("success").inc();
@@ -1587,14 +1823,42 @@ class RelayService {
      * @param amountStr   mUSD amount as a string (e.g., "50.0")
      * @param userParty   Canton party to own the minted CantonMUSD
      */
+    // C1: Periodic refresh of CIP-56 factory CID to detect redeployment
+    async refreshCip56FactoryCid() {
+        if (!process.env.CIP56_PACKAGE_ID)
+            return; // no package ID → CIP-56 disabled
+        const now = Date.now();
+        if (now - this.cip56FactoryLastChecked < RelayService.CIP56_FACTORY_REFRESH_MS)
+            return;
+        try {
+            const factories = await this.canton.queryContracts(canton_client_1.TEMPLATES.MUSDTransferFactory, (p) => true);
+            const newCid = factories.length > 0 ? factories[0].contractId : null;
+            if (newCid !== this.cip56TransferFactoryCid) {
+                if (newCid) {
+                    console.log(`[Relay] CIP-56 MUSDTransferFactory refreshed (cid: ${newCid.slice(0, 20)}...).`);
+                }
+                else {
+                    console.log("[Relay] CIP-56 MUSDTransferFactory no longer found. Reverting to legacy flow.");
+                }
+                this.cip56TransferFactoryCid = newCid;
+            }
+            this.cip56FactoryLastChecked = now;
+        }
+        catch {
+            // Keep previous value on query failure — don't flip-flop on transient errors
+        }
+    }
     async completeBridgeInAndMintMusd(nonce, amountStr, userParty) {
+        // C1: Refresh factory CID if stale (every 5 minutes)
+        await this.refreshCip56FactoryCid();
         try {
             // Create CantonMUSD token for the user
             // Use a deterministic agreementHash for idempotency checking
             // IMPORTANT: Use a delimiter AFTER the nonce to prevent hash collisions.
             // Previously `bridge-in-nonce-1` padded === `bridge-in-nonce-10` padded (same string!)
             const agreementHash = `bridge-in:nonce:${nonce}:`.padEnd(64, "0");
-            const agreementUri = `ethereum:bridge-in:${this.config.bridgeContractAddress}:nonce:${nonce}`;
+            const encodedRecipient = encodeURIComponent(userParty);
+            const agreementUri = `ethereum:bridge-in:${this.config.bridgeContractAddress}:nonce:${nonce}:recipient:${encodedRecipient}`;
             // Check for existing CantonMUSD with this agreement hash (idempotency)
             // Primary idempotency key is agreementUri (bridge-address scoped).
             // agreementHash is nonce-based and can collide across bridge redeploys
@@ -1643,9 +1907,22 @@ class RelayService {
                     throw queryErr;
                 }
             }
+            // CIP-56: Also check CIP56MintedMUSD for duplicates when factory is deployed
+            if (this.cip56TransferFactoryCid && existingMusd.length === 0) {
+                try {
+                    const cip56Existing = await this.canton.queryContracts(canton_client_1.TEMPLATES.CIP56MintedMUSD, (payload) => payload.agreementUri === agreementUri);
+                    if (cip56Existing.length > 0) {
+                        existingMusd = cip56Existing;
+                    }
+                }
+                catch (dupErr) {
+                    // C2: Log rather than silently swallow — helps diagnose partial API failures
+                    console.warn(`[Relay] CIP-56 duplicate check failed for bridge #${nonce}: ${dupErr?.message?.slice(0, 100) || dupErr}`);
+                }
+            }
             const musdAlreadyExists = existingMusd.length > 0;
             if (musdAlreadyExists) {
-                console.log(`[Relay] CantonMUSD for bridge #${nonce} already exists ` +
+                console.log(`[Relay] mUSD for bridge #${nonce} already exists ` +
                     `(${existingMusd[0].contractId.slice(0, 16)}...) — skipping duplicate create`);
             }
             else {
@@ -1653,80 +1930,192 @@ class RelayService {
                     console.warn(`[Relay] Detected ${hashCollisionCandidates} CantonMUSD hash-collision candidate(s) for bridge #${nonce}; ` +
                         `continuing create because agreementUri differs`);
                 }
-                // FIX: Create CantonMUSD with operator as BOTH issuer AND owner.
-                // CantonMUSD template requires `signatory issuer, owner` — if the user party
-                // is not known on this Canton participant, creation fails with UNKNOWN_INFORMEES.
-                // Instead: operator mints (both signatory slots satisfied), then transfers to user.
-                const cantonMusdPayload = {
-                    issuer: this.config.cantonParty,
-                    owner: this.config.cantonParty, // Operator-owned initially
-                    amount: amountStr,
-                    agreementHash,
-                    agreementUri,
-                    privacyObservers: [],
-                };
-                (0, daml_schema_validator_1.validateCreatePayload)("CantonMUSD", cantonMusdPayload);
-                const createResult = await this.canton.createContract(canton_client_1.TEMPLATES.CantonMUSD, cantonMusdPayload);
-                console.log(`[Relay] Created CantonMUSD (operator-owned) for bridge-in #${nonce}: ${amountStr} mUSD`);
-                // Transfer to user if different from operator
-                if (userParty !== this.config.cantonParty) {
+                // ===== CIP-56 DUAL-PATH =====
+                // When MUSDTransferFactory is deployed, mint CIP56MintedMUSD and use
+                // CIP-56 TransferFactory_Transfer instead of legacy CantonMUSD_Transfer.
+                // Falls back to legacy path on any CIP-56 error.
+                let mintAndTransferDone = false;
+                let cip56MintCreated = false; // C4: track CIP-56 mint to prevent dual-mint on fallback
+                if (this.cip56TransferFactoryCid) {
                     try {
-                        // Extract the contractId of the just-created CantonMUSD
-                        let musdCid = this.extractCreatedContractId(createResult, "CantonMUSD");
-                        if (!musdCid) {
-                            // Fallback: query by agreementHash
-                            const created = await this.canton.queryContracts(canton_client_1.TEMPLATES.CantonMUSD, (p) => p.agreementHash === agreementHash && p.owner === this.config.cantonParty);
-                            if (created.length > 0)
-                                musdCid = created[0].contractId;
-                        }
-                        if (musdCid) {
-                            // CantonMUSD_Transfer requires complianceRegistryCid — query for it
-                            const complianceContracts = await this.canton.queryContracts(canton_client_1.TEMPLATES.ComplianceRegistry, (p) => p.operator === this.config.cantonParty).catch(() => []);
-                            if (complianceContracts.length > 0) {
-                                const transferArgs = { newOwner: userParty, complianceRegistryCid: complianceContracts[0].contractId };
-                                (0, daml_schema_validator_1.validateExerciseArgs)("CantonMUSD_Transfer", transferArgs);
-                                const transferResult = await this.canton.exerciseChoice(canton_client_1.TEMPLATES.CantonMUSD, musdCid, "CantonMUSD_Transfer", transferArgs);
-                                console.log(`[Relay] ✅ Transfer proposal created for bridge #${nonce} → ${userParty.slice(0, 30)}...`);
+                        const cip56Payload = {
+                            issuer: this.config.cantonParty,
+                            owner: this.config.cantonParty,
+                            amount: amountStr,
+                            blacklisted: false,
+                            agreementHash,
+                            agreementUri,
+                            observers: [],
+                        };
+                        const cip56CreateResult = await this.canton.createContract(canton_client_1.TEMPLATES.CIP56MintedMUSD, cip56Payload);
+                        console.log(`[Relay] Created CIP56MintedMUSD (operator-owned) for bridge-in #${nonce}: ${amountStr} mUSD`);
+                        cip56MintCreated = true; // C4: mint succeeded — do NOT create legacy CantonMUSD if transfer fails
+                        if (userParty !== this.config.cantonParty) {
+                            let holdingCid = this.extractCreatedContractId(cip56CreateResult, "CIP56MintedMUSD");
+                            if (!holdingCid) {
+                                const cip56Created = await this.canton.queryContracts(canton_client_1.TEMPLATES.CIP56MintedMUSD, (p) => p.owner === this.config.cantonParty && p.agreementUri === agreementUri).catch(() => []);
+                                if (cip56Created.length > 0) {
+                                    holdingCid = cip56Created[0].contractId;
+                                }
+                            }
+                            if (holdingCid) {
+                                const now = new Date().toISOString();
+                                const executeBefore = new Date(Date.now() + 3600000).toISOString();
+                                const transferResult = await this.canton.exerciseChoice(canton_client_1.CIP56_INTERFACES.TransferFactory, this.cip56TransferFactoryCid, "TransferFactory_Transfer", {
+                                    expectedAdmin: this.config.cantonParty,
+                                    transfer: {
+                                        sender: this.config.cantonParty,
+                                        receiver: userParty,
+                                        amount: amountStr,
+                                        instrumentId: { admin: this.config.cantonParty, id: "mUSD" },
+                                        requestedAt: now,
+                                        executeBefore,
+                                        inputHoldingCids: [holdingCid],
+                                        meta: { values: {} },
+                                    },
+                                    extraArgs: {
+                                        context: { values: {} },
+                                        meta: { values: {} },
+                                    },
+                                });
+                                console.log(`[Relay] ✅ CIP-56 TransferFactory_Transfer created for bridge #${nonce} → ${userParty.slice(0, 30)}...`);
+                                // Auto-accept the CIP-56 TransferInstruction
                                 if (this.config.autoAcceptMusdTransferProposals) {
                                     try {
-                                        let proposalCid = this.extractCreatedContractId(transferResult, "CantonMUSDTransferProposal");
-                                        if (!proposalCid) {
-                                            const proposals = await this.canton.queryContracts(canton_client_1.TEMPLATES.CantonMUSDTransferProposal, (p) => p?.newOwner === userParty &&
-                                                p?.musd?.agreementUri === agreementUri &&
-                                                p?.musd?.owner === this.config.cantonParty).catch(() => []);
-                                            if (proposals.length > 0) {
-                                                proposalCid = proposals[0].contractId;
+                                        let instrCid = this.extractCreatedContractId(transferResult, "MUSDTransferInstruction");
+                                        if (!instrCid) {
+                                            // Fallback: query for newly created TransferInstruction
+                                            const instrContracts = await this.canton.queryContracts(canton_client_1.TEMPLATES.MUSDTransferInstruction, (p) => p.transfer?.receiver === userParty && p.admin === this.config.cantonParty).catch(() => []);
+                                            if (instrContracts.length > 0) {
+                                                instrCid = instrContracts[instrContracts.length - 1].contractId;
                                             }
                                         }
-                                        if (proposalCid) {
-                                            await this.canton.exerciseChoice(canton_client_1.TEMPLATES.CantonMUSDTransferProposal, proposalCid, "CantonMUSDTransferProposal_Accept", {}, [userParty]);
-                                            console.log(`[Relay] ✅ Auto-accepted transfer proposal for bridge #${nonce}; mUSD delivered to user`);
+                                        if (instrCid) {
+                                            await this.canton.exerciseChoice(canton_client_1.CIP56_INTERFACES.TransferInstruction, instrCid, "TransferInstruction_Accept", {
+                                                extraArgs: {
+                                                    context: { values: {} },
+                                                    meta: { values: {} },
+                                                },
+                                            }, [userParty]);
+                                            console.log(`[Relay] ✅ CIP-56 transfer accepted for bridge #${nonce}; mUSD delivered to user`);
                                         }
                                         else {
-                                            console.warn(`[Relay] Could not resolve transfer proposal CID for bridge #${nonce}; user must accept manually`);
+                                            console.warn(`[Relay] Could not resolve CIP-56 TransferInstruction CID for bridge #${nonce}; user must accept via wallet`);
                                         }
                                     }
-                                    catch (autoAcceptErr) {
-                                        console.warn(`[Relay] Auto-accept failed for bridge #${nonce}; proposal remains pending: ${autoAcceptErr.message?.slice(0, 120)}`);
+                                    catch (acceptErr) {
+                                        console.warn(`[Relay] CIP-56 auto-accept failed for bridge #${nonce}: ${acceptErr.message?.slice(0, 120)}`);
                                     }
                                 }
                             }
                             else {
-                                console.warn(`[Relay] No ComplianceRegistry found — operator retains CantonMUSD #${nonce} (user can claim later)`);
+                                console.warn(`[Relay] Could not find CIP56MintedMUSD CID for bridge #${nonce}; falling back to legacy`);
+                                throw new Error("CIP56MintedMUSD CID not found");
                             }
                         }
                         else {
-                            console.warn(`[Relay] Could not find CantonMUSD CID for transfer to user (bridge #${nonce})`);
+                            console.log(`[Relay] ✅ CIP56MintedMUSD for bridge-in #${nonce}: ${amountStr} mUSD → operator (user = operator)`);
+                        }
+                        mintAndTransferDone = true;
+                    }
+                    catch (cip56Err) {
+                        if (!mintAndTransferDone && cip56MintCreated) {
+                            // C4: CIP56MintedMUSD exists on ledger but transfer failed.
+                            // Do NOT fall back to legacy — that would create a second token for the same bridge-in.
+                            // CIP-56 orphan recovery will deliver the stranded CIP56MintedMUSD.
+                            console.warn(`[Relay] CIP-56 transfer failed for bridge #${nonce} but CIP56MintedMUSD exists; ` +
+                                `orphan recovery will deliver. Error: ${cip56Err.message?.slice(0, 120)}`);
+                            mintAndTransferDone = true; // prevent legacy fallback
+                        }
+                        else if (!mintAndTransferDone) {
+                            // CIP56MintedMUSD creation itself failed — safe to fall back to legacy
+                            console.warn(`[Relay] CIP-56 mint failed for bridge #${nonce}, falling back to legacy: ${cip56Err.message?.slice(0, 120)}`);
                         }
                     }
-                    catch (transferErr) {
-                        // Non-fatal: mUSD exists operator-owned; user can claim later
-                        console.warn(`[Relay] Transfer to user failed for bridge #${nonce} (operator retains): ${transferErr.message?.slice(0, 120)}`);
+                }
+                if (!mintAndTransferDone) {
+                    // LEGACY PATH: Create CantonMUSD with operator as BOTH issuer AND owner.
+                    // CantonMUSD template requires `signatory issuer, owner` — if the user party
+                    // is not known on this Canton participant, creation fails with UNKNOWN_INFORMEES.
+                    // Instead: operator mints (both signatory slots satisfied), then transfers to user.
+                    const cantonMusdPayload = {
+                        issuer: this.config.cantonParty,
+                        owner: this.config.cantonParty, // Operator-owned initially
+                        amount: amountStr,
+                        agreementHash,
+                        agreementUri,
+                        privacyObservers: [],
+                    };
+                    (0, daml_schema_validator_1.validateCreatePayload)("CantonMUSD", cantonMusdPayload);
+                    const createResult = await this.canton.createContract(canton_client_1.TEMPLATES.CantonMUSD, cantonMusdPayload);
+                    console.log(`[Relay] Created CantonMUSD (operator-owned) for bridge-in #${nonce}: ${amountStr} mUSD`);
+                    // Transfer to user if different from operator
+                    if (userParty !== this.config.cantonParty) {
+                        try {
+                            // Extract the contractId of the just-created CantonMUSD
+                            let musdCid = this.extractCreatedContractId(createResult, "CantonMUSD");
+                            if (!musdCid) {
+                                // Fallback: query by agreementUri (bridge-address scoped) to avoid
+                                // nonce-hash collisions across bridge redeploys.
+                                const created = await this.canton.queryContracts(canton_client_1.TEMPLATES.CantonMUSD, (p) => p.owner === this.config.cantonParty &&
+                                    (p.agreementUri === agreementUri ||
+                                        (!p.agreementUri &&
+                                            (p.agreementHash === agreementHash || p.agreementHash === oldAgreementHash) &&
+                                            p.amount === amountStr)));
+                                if (created.length > 0) {
+                                    created.sort((a, b) => b.offset - a.offset);
+                                    musdCid = created[0].contractId;
+                                }
+                            }
+                            if (musdCid) {
+                                // CantonMUSD_Transfer requires complianceRegistryCid — query for it
+                                const complianceContracts = await this.canton.queryContracts(canton_client_1.TEMPLATES.ComplianceRegistry, (p) => p.operator === this.config.cantonParty).catch(() => []);
+                                if (complianceContracts.length > 0) {
+                                    const transferArgs = { newOwner: userParty, complianceRegistryCid: complianceContracts[0].contractId };
+                                    (0, daml_schema_validator_1.validateExerciseArgs)("CantonMUSD_Transfer", transferArgs);
+                                    const transferResult = await this.canton.exerciseChoice(canton_client_1.TEMPLATES.CantonMUSD, musdCid, "CantonMUSD_Transfer", transferArgs);
+                                    console.log(`[Relay] ✅ Transfer proposal created for bridge #${nonce} → ${userParty.slice(0, 30)}...`);
+                                    if (this.config.autoAcceptMusdTransferProposals) {
+                                        try {
+                                            let proposalCid = this.extractCreatedContractId(transferResult, "CantonMUSDTransferProposal");
+                                            if (!proposalCid) {
+                                                const proposals = await this.canton.queryContracts(canton_client_1.TEMPLATES.CantonMUSDTransferProposal, (p) => p?.newOwner === userParty &&
+                                                    p?.musd?.agreementUri === agreementUri &&
+                                                    p?.musd?.owner === this.config.cantonParty).catch(() => []);
+                                                if (proposals.length > 0) {
+                                                    proposalCid = proposals[0].contractId;
+                                                }
+                                            }
+                                            if (proposalCid) {
+                                                await this.canton.exerciseChoice(canton_client_1.TEMPLATES.CantonMUSDTransferProposal, proposalCid, "CantonMUSDTransferProposal_Accept", {}, [userParty]);
+                                                console.log(`[Relay] ✅ Auto-accepted transfer proposal for bridge #${nonce}; mUSD delivered to user`);
+                                            }
+                                            else {
+                                                console.warn(`[Relay] Could not resolve transfer proposal CID for bridge #${nonce}; user must accept manually`);
+                                            }
+                                        }
+                                        catch (autoAcceptErr) {
+                                            console.warn(`[Relay] Auto-accept failed for bridge #${nonce}; proposal remains pending: ${autoAcceptErr.message?.slice(0, 120)}`);
+                                        }
+                                    }
+                                }
+                                else {
+                                    console.warn(`[Relay] No ComplianceRegistry found — operator retains CantonMUSD #${nonce} (user can claim later)`);
+                                }
+                            }
+                            else {
+                                console.warn(`[Relay] Could not find CantonMUSD CID for transfer to user (bridge #${nonce})`);
+                            }
+                        }
+                        catch (transferErr) {
+                            // Non-fatal: mUSD exists operator-owned; user can claim later
+                            console.warn(`[Relay] Transfer to user failed for bridge #${nonce} (operator retains): ${transferErr.message?.slice(0, 120)}`);
+                        }
                     }
-                }
-                else {
-                    console.log(`[Relay] ✅ CantonMUSD for bridge-in #${nonce}: ${amountStr} mUSD → operator (user = operator)`);
-                }
+                    else {
+                        console.log(`[Relay] ✅ CantonMUSD for bridge-in #${nonce}: ${amountStr} mUSD → operator (user = operator)`);
+                    }
+                } // end if (!mintAndTransferDone) — legacy path
             }
             // Exercise BridgeIn_Complete properly: create an AttestationRequest on Canton,
             // then exercise BridgeIn_Complete with the attestation CID.
@@ -1759,7 +2148,7 @@ class RelayService {
                                 positionCids: [],
                                 collectedSignatures: req.payload.validators, // All validators attest (operator-controlled)
                                 ecdsaSignatures: [],
-                                requiredSignatures: req.payload.requiredSignatures,
+                                requiredSignatures: Number(req.payload.requiredSignatures) || 1,
                                 direction: "EthereumToCanton",
                             };
                             (0, daml_schema_validator_1.validateCreatePayload)("AttestationRequest", attestPayload);
@@ -1834,7 +2223,32 @@ class RelayService {
             console.error(`[Relay] Failed to process pending BridgeInRequests: ${error.message}`);
         }
     }
+    async resolveRecipientFromEthereumNonce(nonce) {
+        if (!this.bridgeContract)
+            return null;
+        const currentBlock = await this.provider.getBlockNumber();
+        const lookback = Math.min(this.config.replayLookbackBlocks, currentBlock);
+        const fromBlock = Math.max(0, currentBlock - lookback);
+        const filter = this.bridgeContract.filters.BridgeToCantonRequested();
+        const chunkSize = 10000;
+        for (let start = fromBlock; start <= currentBlock; start += chunkSize) {
+            const end = Math.min(start + chunkSize - 1, currentBlock);
+            const events = await this.bridgeContract.queryFilter(filter, start, end);
+            for (const event of events) {
+                const args = event.args;
+                if (!args || Number(args.nonce) !== Number(nonce))
+                    continue;
+                const recipient = String(args.cantonRecipient || "");
+                if (!recipient)
+                    continue;
+                return (0, recipient_routing_1.resolveRecipientParty)(recipient, this.config.recipientPartyAliases);
+            }
+        }
+        return null;
+    }
     async recoverOrphanedMusd() {
+        // C1: Refresh factory CID if stale (every 5 minutes)
+        await this.refreshCip56FactoryCid();
         let operatorMusd = [];
         try {
             operatorMusd = await this.canton.queryContracts(canton_client_1.TEMPLATES.CantonMUSD, (p) => p.owner === this.config.cantonParty && p.issuer === this.config.cantonParty);
@@ -1862,7 +2276,9 @@ class RelayService {
         }
         let requests = [];
         try {
-            requests = await this.canton.queryContracts(canton_client_1.TEMPLATES.BridgeInRequest, (p) => p.status === "pending" || p.status === "completed");
+            requests = await this.canton.queryContracts(canton_client_1.TEMPLATES.BridgeInRequest, (p) => p.status === "pending" ||
+                p.status === "completed" ||
+                p.status === "cancelled");
         }
         catch (error) {
             console.warn(`[Relay] Orphan recovery could not query BridgeInRequests: ${error?.message || error}`);
@@ -1887,13 +2303,42 @@ class RelayService {
         let recoveredCount = 0;
         for (const orphan of bridgeInOrphans) {
             const agreementUri = String(orphan.payload?.agreementUri || "");
-            const nonceMatch = agreementUri.match(/:nonce:(\d+)$/);
+            const nonceMatch = agreementUri.match(/:nonce:(\d+)(?::recipient:.*)?$/);
             if (!nonceMatch)
                 continue;
             const nonce = Number(nonceMatch[1]);
-            const userParty = nonceToUser.get(nonce);
-            if (!userParty || userParty === this.config.cantonParty)
+            let userParty = nonceToUser.get(nonce);
+            if (!userParty) {
+                const recipientMatch = agreementUri.match(/:recipient:(.+)$/);
+                if (recipientMatch && recipientMatch[1]) {
+                    let decoded = recipientMatch[1];
+                    try {
+                        decoded = decodeURIComponent(decoded);
+                    }
+                    catch {
+                        // best-effort decode; keep raw when not URI-encoded
+                    }
+                    userParty = (0, recipient_routing_1.resolveRecipientParty)(decoded, this.config.recipientPartyAliases);
+                }
+            }
+            if (!userParty) {
+                try {
+                    const resolved = await this.resolveRecipientFromEthereumNonce(nonce);
+                    if (resolved)
+                        userParty = resolved;
+                }
+                catch (ethErr) {
+                    console.warn(`[Relay] Orphan nonce ${nonce}: Ethereum event scan failed: ${ethErr?.message || ethErr}`);
+                }
+            }
+            if (!userParty || userParty === this.config.cantonParty) {
+                if (!userParty) {
+                    console.warn(`[Relay] Orphan CantonMUSD nonce ${nonce}: no recipient resolved ` +
+                        `(contractId: ${orphan.contractId.slice(0, 20)}...)`);
+                    metrics_1.orphanRecoveryTotal.labels("skipped").inc();
+                }
                 continue;
+            }
             try {
                 const transferResult = await this.canton.exerciseChoice(canton_client_1.TEMPLATES.CantonMUSD, orphan.contractId, "CantonMUSD_Transfer", { newOwner: userParty, complianceRegistryCid });
                 if (this.config.autoAcceptMusdTransferProposals) {
@@ -1923,7 +2368,105 @@ class RelayService {
             metrics_1.orphanRecoveryTotal.labels("skipped").inc();
         }
         else {
-            console.log(`[Relay] Orphan recovery transferred ${recoveredCount} contract(s) this cycle`);
+            console.log(`[Relay] Orphan recovery transferred ${recoveredCount} legacy contract(s) this cycle`);
+        }
+        // ===== CIP-56 Orphan Recovery =====
+        // Scan for operator-owned CIP56MintedMUSD that failed delivery (same pattern as legacy).
+        // Only runs when CIP-56 factory is deployed.
+        if (this.cip56TransferFactoryCid) {
+            let cip56Orphans = [];
+            try {
+                const operatorCip56 = await this.canton.queryContracts(canton_client_1.TEMPLATES.CIP56MintedMUSD, (p) => p.owner === this.config.cantonParty && p.issuer === this.config.cantonParty);
+                cip56Orphans = operatorCip56.filter((c) => {
+                    const uri = c.payload?.agreementUri;
+                    return typeof uri === "string" && uri.startsWith("ethereum:bridge-in:");
+                });
+            }
+            catch {
+                // CIP56MintedMUSD query failed — skip CIP-56 orphan recovery this cycle
+            }
+            let cip56Recovered = 0;
+            for (const orphan of cip56Orphans) {
+                const uri = String(orphan.payload?.agreementUri || "");
+                const nonceMatch = uri.match(/:nonce:(\d+)(?::recipient:.*)?$/);
+                if (!nonceMatch)
+                    continue;
+                const orphanNonce = Number(nonceMatch[1]);
+                let orphanUser = nonceToUser.get(orphanNonce);
+                if (!orphanUser) {
+                    const recipientMatch = uri.match(/:recipient:(.+)$/);
+                    if (recipientMatch && recipientMatch[1]) {
+                        let decoded = recipientMatch[1];
+                        try {
+                            decoded = decodeURIComponent(decoded);
+                        }
+                        catch { /* keep raw */ }
+                        orphanUser = (0, recipient_routing_1.resolveRecipientParty)(decoded, this.config.recipientPartyAliases);
+                    }
+                }
+                if (!orphanUser || orphanUser === this.config.cantonParty)
+                    continue;
+                try {
+                    const now = new Date().toISOString();
+                    const executeBefore = new Date(Date.now() + 3600000).toISOString();
+                    const transferResult = await this.canton.exerciseChoice(canton_client_1.CIP56_INTERFACES.TransferFactory, this.cip56TransferFactoryCid, "TransferFactory_Transfer", {
+                        expectedAdmin: this.config.cantonParty,
+                        transfer: {
+                            sender: this.config.cantonParty,
+                            receiver: orphanUser,
+                            amount: String(orphan.payload?.amount || "0"),
+                            instrumentId: { admin: this.config.cantonParty, id: "mUSD" },
+                            requestedAt: now,
+                            executeBefore,
+                            inputHoldingCids: [orphan.contractId],
+                            meta: { values: {} },
+                        },
+                        extraArgs: {
+                            context: { values: {} },
+                            meta: { values: {} },
+                        },
+                    });
+                    // Track actual delivery: only count success when mUSD reaches the user
+                    let delivered = !this.config.autoAcceptMusdTransferProposals;
+                    if (this.config.autoAcceptMusdTransferProposals) {
+                        let instrCid = this.extractCreatedContractId(transferResult, "MUSDTransferInstruction");
+                        if (!instrCid) {
+                            const instrContracts = await this.canton.queryContracts(canton_client_1.TEMPLATES.MUSDTransferInstruction, (p) => p.transfer?.receiver === orphanUser && p.admin === this.config.cantonParty).catch(() => []);
+                            if (instrContracts.length > 0) {
+                                instrCid = instrContracts[instrContracts.length - 1].contractId;
+                            }
+                        }
+                        if (instrCid) {
+                            await this.canton.exerciseChoice(canton_client_1.CIP56_INTERFACES.TransferInstruction, instrCid, "TransferInstruction_Accept", {
+                                extraArgs: {
+                                    context: { values: {} },
+                                    meta: { values: {} },
+                                },
+                            }, [orphanUser]);
+                            delivered = true;
+                        }
+                        else {
+                            console.warn(`[Relay] CIP-56 orphan recovery: TransferInstruction CID not found for #${orphanNonce}; user must accept via wallet`);
+                        }
+                    }
+                    if (delivered) {
+                        cip56Recovered++;
+                        metrics_1.orphanRecoveryTotal.labels("success").inc();
+                        console.log(`[Relay] CIP-56 orphan recovery: bridge #${orphanNonce} → ${orphanUser.slice(0, 36)}...`);
+                    }
+                    else {
+                        metrics_1.orphanRecoveryTotal.labels("skipped").inc();
+                        console.warn(`[Relay] CIP-56 orphan recovery incomplete for #${orphanNonce}: TransferFactory_Transfer succeeded but delivery pending`);
+                    }
+                }
+                catch (error) {
+                    metrics_1.orphanRecoveryTotal.labels("error").inc();
+                    console.warn(`[Relay] CIP-56 orphan recovery failed for nonce #${orphanNonce}: ${error?.message || error}`);
+                }
+            }
+            if (cip56Recovered > 0) {
+                console.log(`[Relay] CIP-56 orphan recovery transferred ${cip56Recovered} contract(s) this cycle`);
+            }
         }
     }
     // ============================================================

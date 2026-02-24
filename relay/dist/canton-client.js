@@ -36,7 +36,7 @@ var __importStar = (this && this.__importStar) || function (mod) {
     return result;
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.TEMPLATES = exports.parseTemplateId = exports.CantonApiError = exports.CantonClient = void 0;
+exports.CIP56_INTERFACES = exports.TEMPLATES = exports.parseTemplateId = exports.CantonApiError = exports.CantonClient = void 0;
 const crypto = __importStar(require("crypto"));
 // ============================================================
 //                     CLIENT
@@ -311,6 +311,7 @@ exports.parseTemplateId = parseTemplateId;
 /** Well-known template IDs for Minted Protocol */
 exports.TEMPLATES = {
     AttestationRequest: { moduleName: "Minted.Protocol.V3", entityName: "AttestationRequest" },
+    SignedAttestation: { moduleName: "Minted.Protocol.V3", entityName: "SignedAttestation" },
     ValidatorSignature: { moduleName: "Minted.Protocol.V3", entityName: "ValidatorSignature" },
     BridgeService: { moduleName: "Minted.Protocol.V3", entityName: "BridgeService" },
     BridgeOutRequest: { moduleName: "Minted.Protocol.V3", entityName: "BridgeOutRequest" },
@@ -319,6 +320,7 @@ exports.TEMPLATES = {
     ComplianceRegistry: { moduleName: "Compliance", entityName: "ComplianceRegistry" },
     // Standalone module bridge-out requests (from CantonDirectMint USDC/USDCx minting)
     StandaloneBridgeOutRequest: { moduleName: "CantonDirectMint", entityName: "BridgeOutRequest" },
+    CantonDirectMintService: { moduleName: "CantonDirectMint", entityName: "CantonDirectMintService" },
     // Standalone module redemption requests (mUSD burned; Canton USDC owed)
     RedemptionRequest: { moduleName: "CantonDirectMint", entityName: "RedemptionRequest" },
     // On-ledger marker for Ethereum-side redemption settlement idempotency
@@ -332,5 +334,37 @@ exports.TEMPLATES = {
     CantonStakingService: { moduleName: "CantonSMUSD", entityName: "CantonStakingService" },
     // ETH Pool service (yield → pooledUsdc counter, share price ↑)
     CantonETHPoolService: { moduleName: "CantonETHPool", entityName: "CantonETHPoolService" },
+    // CIP-56 factories and instructions (ble-protocol-cip56 package, SDK 3.4.10)
+    // C3: packageId pinned from CIP56_PACKAGE_ID env var to avoid template ambiguity.
+    // Queries work without packageId (match any package); creates/exercises require it.
+    CIP56MintedMUSD: { moduleName: "CIP56Interfaces", entityName: "CIP56MintedMUSD", ...(process.env.CIP56_PACKAGE_ID ? { packageId: process.env.CIP56_PACKAGE_ID } : {}) },
+    MUSDTransferFactory: { moduleName: "CIP56Interfaces", entityName: "MUSDTransferFactory", ...(process.env.CIP56_PACKAGE_ID ? { packageId: process.env.CIP56_PACKAGE_ID } : {}) },
+    MUSDTransferInstruction: { moduleName: "CIP56Interfaces", entityName: "MUSDTransferInstruction", ...(process.env.CIP56_PACKAGE_ID ? { packageId: process.env.CIP56_PACKAGE_ID } : {}) },
+    MUSDAllocationFactory: { moduleName: "CIP56Interfaces", entityName: "MUSDAllocationFactory", ...(process.env.CIP56_PACKAGE_ID ? { packageId: process.env.CIP56_PACKAGE_ID } : {}) },
+    MUSDAllocation: { moduleName: "CIP56Interfaces", entityName: "MUSDAllocation", ...(process.env.CIP56_PACKAGE_ID ? { packageId: process.env.CIP56_PACKAGE_ID } : {}) },
+};
+/**
+ * CIP-56 Splice interface IDs for exercising interface-defined choices.
+ * Canton JSON API v2 requires the INTERFACE template ID (not the concrete
+ * template) when exercising a choice defined on a Daml interface.
+ * Pass these as the `templateId` argument to `exerciseChoice`.
+ *
+ * Package ID is from splice-api-token-transfer-instruction-v1 DAR
+ * (bundled in ble-protocol-cip56-1.0.0.dar as a data-dependency).
+ */
+const SPLICE_TRANSFER_INSTRUCTION_PKG = "55ba4deb0ad4662c4168b39859738a0e91388d252286480c7331b3f71a517281";
+exports.CIP56_INTERFACES = {
+    /** TransferFactory interface — for TransferFactory_Transfer choice */
+    TransferFactory: {
+        packageId: SPLICE_TRANSFER_INSTRUCTION_PKG,
+        moduleName: "Splice.Api.Token.TransferInstructionV1",
+        entityName: "TransferFactory",
+    },
+    /** TransferInstruction interface — for TransferInstruction_Accept/Reject/Withdraw */
+    TransferInstruction: {
+        packageId: SPLICE_TRANSFER_INSTRUCTION_PKG,
+        moduleName: "Splice.Api.Token.TransferInstructionV1",
+        entityName: "TransferInstruction",
+    },
 };
 //# sourceMappingURL=canton-client.js.map

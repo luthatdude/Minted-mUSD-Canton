@@ -13,14 +13,19 @@
  *   cd relay && npx ts-node --skip-project init-cip56-factories.ts
  */
 
-import { CantonClient, TEMPLATES } from "./canton-client";
 import * as dotenv from "dotenv";
 import * as path from "path";
 
+// Load env BEFORE importing canton-client — TEMPLATES reads
+// process.env.CIP56_PACKAGE_ID at module load time (top-level const).
 const envFile = process.env.NODE_ENV === "development" ? ".env.development" : ".env";
 dotenv.config({ path: path.join(__dirname, envFile) });
 
 async function initCip56Factories() {
+  // Dynamic import: canton-client's TEMPLATES const reads process.env.CIP56_PACKAGE_ID
+  // at module initialisation, so we must import AFTER dotenv.config() has run.
+  const { CantonClient, TEMPLATES } = await import("./canton-client");
+
   const cantonHost = process.env.CANTON_HOST || "localhost";
   const cantonPort = parseInt(process.env.CANTON_PORT || "7575", 10);
   const cantonToken = process.env.CANTON_TOKEN || "dummy-no-auth";
