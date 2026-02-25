@@ -17,6 +17,9 @@ export {}; // module boundary — prevents global scope conflicts with other scr
  *   --force-conversion-probe Force a CIP-56→redeemable conversion regardless of existing
  *                             redeemable balance, then constrain redeem to the newly
  *                             converted CID(s). Implies --require-conversion.
+ *   --no-fallback            Mark hybrid fallback as disabled; force-conversion will
+ *                             report EXPECTED_BLOCKED_BY_POLICY instead of FAIL.
+ *   --fallback-enabled       Override: explicitly mark fallback as enabled.
  *
  * Assertions (all checked when --execute):
  *   1. No template-not-found or config errors in responses
@@ -27,6 +30,7 @@ export {}; // module boundary — prevents global scope conflicts with other scr
  *   6. MIN_REDEEM >= 1.0 enforced for token selection
  *   7. conversion_path_executed (force mode only): conversion succeeded AND
  *      redeem consumed a CID created by this conversion run
+ *   8. verdict: PASS | FAIL | EXPECTED_BLOCKED_BY_POLICY with mode/fallback context
  */
 
 const args = process.argv.slice(2);
@@ -49,6 +53,10 @@ const FORCE_CONVERSION = hasFlag("force-conversion-probe");
 const ALLOW_REDEEM_ONLY = hasFlag("allow-redeem-only") && !FORCE_CONVERSION;
 const REQUIRE_CONVERSION = FORCE_CONVERSION || hasFlag("require-conversion") || !ALLOW_REDEEM_ONLY;
 const MIN_REDEEM = 1.0;
+// --no-fallback marks hybrid fallback as disabled; --fallback-enabled re-enables it explicitly
+const FALLBACK_ENABLED = hasFlag("fallback-enabled") ||
+  (!hasFlag("no-fallback") && process.env.CANTON_HYBRID_FALLBACK_ENABLED !== "false");
+const MODE: "native" | "force-conversion" = FORCE_CONVERSION ? "force-conversion" : "native";
 
 interface Preflight {
   userCip56Balance: string;
@@ -66,7 +74,7 @@ interface Balances {
 
 interface Assertion {
   name: string;
-  result: "PASS" | "FAIL" | "SKIP";
+  result: "PASS" | "FAIL" | "SKIP" | "EXPECTED_BLOCKED_BY_POLICY";
   detail: string;
 }
 
@@ -81,6 +89,19 @@ function assert(name: string, pass: boolean, detail: string): boolean {
 function skip(name: string, detail: string): void {
   assertions.push({ name, result: "SKIP", detail });
   console.log(`  [assert] SKIP — ${name}: ${detail}`);
+}
+
+function policyBlock(name: string, detail: string): void {
+  assertions.push({ name, result: "EXPECTED_BLOCKED_BY_POLICY", detail });
+  console.log(`  [assert] EXPECTED_BLOCKED_BY_POLICY — ${name}: ${detail}`);
+}
+
+type Verdict = "PASS" | "FAIL" | "EXPECTED_BLOCKED_BY_POLICY";
+
+function computeVerdict(): Verdict {
+  if (assertions.some(a => a.result === "FAIL")) return "FAIL";
+  if (assertions.some(a => a.result === "EXPECTED_BLOCKED_BY_POLICY")) return "EXPECTED_BLOCKED_BY_POLICY";
+  return "PASS";
 }
 
 async function fetchPreflight(): Promise<Preflight> {
@@ -140,7 +161,7 @@ function checkForKnownErrors(blockers: string[]): boolean {
 }
 
 async function main() {
-  console.log(`[canary] amount=${AMOUNT} execute=${EXECUTE} require-conversion=${REQUIRE_CONVERSION} force-conversion=${FORCE_CONVERSION}`);
+  console.log(`[canary] mode=${MODE} fallbackEnabled=${FALLBACK_ENABLED} amount=${AMOUNT} execute=${EXECUTE} require-conversion=${REQUIRE_CONVERSION} force-conversion=${FORCE_CONVERSION}`);
   console.log(`[canary] party=${PARTY.slice(0, 30)}...`);
   console.log(`[canary] base=${BASE_URL}\n`);
 
@@ -243,7 +264,11 @@ async function main() {
       convError ? `error: ${convError.slice(0, 100)}` : "no preprocessing errors");
 
     if (!convResult.success) {
-      assert("conversion_success", false, `error: ${convResult.error}`);
+      if (FORCE_CONVERSION && !FALLBACK_ENABLED) {
+        policyBlock("conversion_success", `blocked by policy (fallback disabled): ${convResult.error}`);
+      } else {
+        assert("conversion_success", false, `error: ${convResult.error}`);
+      }
       conversionOk = false;
     } else {
       assert("conversion_success", true, `converted ${convResult.convertedAmount} mUSD`);
@@ -253,6 +278,21 @@ async function main() {
     skip("conversion_success", "no conversion needed");
     skip("no_template_errors", "no conversion needed");
     skip("no_config_errors_convert", "no conversion needed");
+  }
+
+  // Early exit: force-conversion with fallback disabled — policy block is expected
+  if (FORCE_CONVERSION && !FALLBACK_ENABLED && !conversionOk) {
+    skip("cip56_decreased", "policy-blocked (expected)");
+    skip("redeemable_increased", "policy-blocked (expected)");
+    skip("redeem_service_exists", "policy-blocked (expected)");
+    skip("min_redeem_enforced", "policy-blocked (expected)");
+    skip("redeem_token_found", "policy-blocked (expected)");
+    skip("redeem_no_template_error", "policy-blocked (expected)");
+    skip("redeem_no_preprocessing_error", "policy-blocked (expected)");
+    skip("redeem_success", "policy-blocked (expected)");
+    skip("conversion_path_executed", "policy-blocked (expected)");
+    printSummary();
+    process.exit(0);
   }
 
   // Step 4: Post-conversion state assertions
@@ -362,21 +402,32 @@ async function main() {
 
   printSummary();
 
-  const failCount = assertions.filter((a) => a.result === "FAIL").length;
-  if (failCount > 0) {
+  const verdict = computeVerdict();
+  if (verdict === "FAIL") {
+    const failCount = assertions.filter((a) => a.result === "FAIL").length;
     console.error(`\n[canary] FAIL — ${failCount} assertion(s) failed.`);
     process.exit(1);
+  }
+
+  if (verdict === "EXPECTED_BLOCKED_BY_POLICY") {
+    console.log("\n[canary] EXPECTED_BLOCKED_BY_POLICY — force-conversion correctly blocked (fallback disabled).");
+    process.exit(0);
   }
 
   console.log("\n[canary] PASS — all assertions passed.");
 }
 
 function printSummary(): void {
-  console.log("\n[canary:assertions]");
+  const verdict = computeVerdict();
+  console.log("\n[canary:summary]");
+  console.log(`  mode: ${MODE}`);
+  console.log(`  fallbackEnabled: ${FALLBACK_ENABLED}`);
+  console.log(`  verdict: ${verdict}`);
+  console.log("[canary:assertions]");
   for (const a of assertions) {
-    console.log(`  ${a.result.padEnd(4)} ${a.name}: ${a.detail}`);
+    console.log(`  ${a.result.padEnd(28)} ${a.name}: ${a.detail}`);
   }
-  console.log(`[canary:assertions] ${JSON.stringify(assertions)}`);
+  console.log(`[canary:result] ${JSON.stringify({ mode: MODE, fallbackEnabled: FALLBACK_ENABLED, verdict, assertions })}`);
 }
 
 main().catch((err) => {
