@@ -11,6 +11,7 @@ import {
   refreshPriceFeeds,
   convertCip56ToRedeemable,
   fetchBridgePreflight,
+  nativeCip56Repay,
   type CantonBalancesData,
   type EscrowInfo,
   type SimpleToken,
@@ -397,6 +398,29 @@ export function CantonBorrow() {
           throw new Error("Selected debt is already settled.");
         }
 
+        // ── CIP-56 NATIVE PATH (Phase 4) ──────────────────────────
+        // Try the native atomic repay first. Falls back to hybrid on infra errors only.
+        const preflight = await fetchBridgePreflight(activeParty).catch(() => null);
+        const cip56Available = preflight ? parseFloat(preflight.userCip56Balance) : 0;
+        if (cip56Available >= targetRepayAmount - 0.000001) {
+          console.log("[CantonBorrow] Attempting CIP-56 native repay...");
+          const nativeResult = await nativeCip56Repay(activeParty, targetRepayAmount, selectedDebt.contractId);
+          if (nativeResult.success) {
+            console.log("[CantonBorrow] Native repay succeeded:", nativeResult.commandId);
+            setResult(`Repay submitted on Canton (native CIP-56 path).`);
+            setAmount(""); refresh();
+            return;
+          }
+          // Infra errors (409 inventory / 5xx) fall through to hybrid; everything else surfaces
+          const status = nativeResult.httpStatus ?? 0;
+          if (status === 409 || (status >= 500 && status < 600)) {
+            console.warn("[CantonBorrow] Native repay infra error, falling back to hybrid:", nativeResult.error);
+          } else {
+            throw new Error(nativeResult.error || "Repay rejected");
+          }
+        }
+
+        // ── HYBRID FALLBACK PATH ──────────────────────────────────
         // Auto-convert CIP-56 → CantonMUSD if needed for repayment
         let repayTokens = fresh.tokens || [];
         const redeemableTotal = repayTokens.reduce((s, t) => s + parseFloat(t.amount || "0"), 0);

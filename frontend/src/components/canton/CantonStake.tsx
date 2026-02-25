@@ -7,6 +7,9 @@ import {
   useCantonLedger,
   cantonExercise,
   fetchFreshBalances,
+  fetchBridgePreflight,
+  convertCip56ToRedeemable,
+  nativeCip56Stake,
   type CantonBalancesData,
   type SimpleToken,
 } from "@/hooks/useCantonLedger";
@@ -168,7 +171,50 @@ export function CantonStake() {
         freshService = operatorFresh?.stakingService || null;
       }
       if (!freshService) throw new Error("Staking service not found");
-      const freshTokens = fresh.tokens || [];
+
+      // ── CIP-56 NATIVE PATH (Phase 4) ──────────────────────────
+      // Try the native atomic stake first. Falls back to hybrid on infra errors only.
+      const preflight = await fetchBridgePreflight(activeParty).catch(() => null);
+      const cip56Available = preflight ? parseFloat(preflight.userCip56Balance) : 0;
+      if (cip56Available >= parsedAmount - 0.000001) {
+        console.log("[CantonStake] Attempting CIP-56 native stake...");
+        const nativeResult = await nativeCip56Stake(activeParty, parsedAmount);
+        if (nativeResult.success) {
+          console.log("[CantonStake] Native stake succeeded:", nativeResult.commandId);
+          setTxSuccess(`Staked ${fmtAmount(parsedAmount)} mUSD → smUSD shares (native CIP-56 path)`);
+          setAmount(""); await refresh();
+          return;
+        }
+        // Infra errors (409 inventory / 5xx) fall through to hybrid; everything else surfaces
+        const status = nativeResult.httpStatus ?? 0;
+        if (status === 409 || (status >= 500 && status < 600)) {
+          console.warn("[CantonStake] Native stake infra error, falling back to hybrid:", nativeResult.error);
+        } else {
+          throw new Error(nativeResult.error || "Stake rejected");
+        }
+      }
+
+      // ── HYBRID FALLBACK PATH ──────────────────────────────────
+      // Auto-convert CIP-56 → CantonMUSD if user doesn't have enough legacy tokens
+      let freshTokens = fresh.tokens || [];
+      const redeemableTotal = freshTokens.reduce((s, t) => s + parseFloat(t.amount || "0"), 0);
+      if (redeemableTotal < parsedAmount - 0.000001) {
+        try {
+          const hybridPreflight = preflight ?? await fetchBridgePreflight(activeParty).catch(() => null);
+          const cip56Bal = hybridPreflight ? parseFloat(hybridPreflight.userCip56Balance) : 0;
+          if (cip56Bal > 0) {
+            const convertNeeded = Math.min(parsedAmount - redeemableTotal, cip56Bal);
+            const convResult = await convertCip56ToRedeemable(activeParty, convertNeeded);
+            if (convResult.success) {
+              const refreshed = await fetchFreshBalances(activeParty);
+              freshTokens = refreshed.tokens || [];
+            }
+          }
+        } catch (convErr) {
+          console.warn("[CantonStake] CIP-56 auto-conversion for stake failed:", convErr);
+        }
+      }
+
       const token = await selectTokenForRequestedAmount(
         fresh.party,
         "CantonMUSD",

@@ -2,22 +2,22 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import * as crypto from "crypto";
 
 /**
- * /api/canton-cip56-redeem — CIP-56 Native Redeem (Phase 3)
+ * /api/canton-cip56-stake — CIP-56 Native smUSD Stake (Phase 4)
  *
  * Single atomic batch that:
  *   1. Archives user's CIP-56 tokens
- *   2. Creates CIP-56 change for user (if inputs > redeemAmount)
+ *   2. Creates CIP-56 change for user (if inputs > stakeAmount)
  *   3. Creates CIP-56 escrow for operator
- *   4. Exercises DirectMint_RedeemFromInventory on the service
+ *   4. Exercises StakeFromInventory on the staking service
  *
  * This eliminates the intermediate user-owned CantonMUSD step that the
- * hybrid flow (canton-convert + canton-command) requires.
+ * hybrid flow (canton-convert + Stake) requires.
  *
  * POST { party: string, amount: string }
- * Returns: { success, mode, redeemAmount, feeEstimate, commandId }
+ * Returns: { success, mode, stakeAmount, commandId }
  *
  * Falls back cleanly — if this endpoint returns an error, the caller
- * should retry with the hybrid flow (canton-convert → DirectMint_Redeem).
+ * should retry with the hybrid flow (canton-convert → Stake).
  */
 
 const CANTON_BASE_URL =
@@ -53,23 +53,21 @@ function validateRequiredConfig(): string | null {
 }
 
 // ── Idempotency store ──────────────────────────────────────
-interface RedeemRecord {
+interface StakeRecord {
   success: boolean;
   mode: string;
-  redeemAmount: string;
-  feeEstimate: string;
-  netAmount: string;
+  stakeAmount: string;
   commandId: string;
   cip56Consumed: number;
   inventoryConsumed: number;
   timestamp: string;
 }
 
-const redeemLog = new Map<string, RedeemRecord>();
+const stakeLog = new Map<string, StakeRecord>();
 
 function idempotencyKey(sourceCids: string[], amount: string, party: string): string {
   const sorted = [...sourceCids].sort().join(",");
-  return crypto.createHash("sha256").update(`${sorted}:${amount}:${party}`).digest("hex").slice(0, 32);
+  return crypto.createHash("sha256").update(`stake:${sorted}:${amount}:${party}`).digest("hex").slice(0, 32);
 }
 
 // ── Canton API helpers ─────────────────────────────────────
@@ -169,8 +167,8 @@ export default async function handler(
   if (!amount || typeof amount !== "string") {
     return res.status(400).json({ error: "Missing amount", mode: "native" });
   }
-  const redeemAmount = parseFloat(amount);
-  if (!Number.isFinite(redeemAmount) || redeemAmount <= 0) {
+  const stakeAmount = parseFloat(amount);
+  if (!Number.isFinite(stakeAmount) || stakeAmount <= 0) {
     return res.status(400).json({ error: "Amount must be positive", mode: "native" });
   }
 
@@ -198,9 +196,9 @@ export default async function handler(
       .sort((a, b) => b.amount - a.amount);
 
     const totalCip56 = userCip56.reduce((s, c) => s + c.amount, 0);
-    if (totalCip56 < redeemAmount - 0.000001) {
+    if (totalCip56 < stakeAmount - 0.000001) {
       return res.status(400).json({
-        error: `Insufficient CIP-56 balance: have ${totalCip56.toFixed(6)}, need ${redeemAmount.toFixed(6)}`,
+        error: `Insufficient CIP-56 balance: have ${totalCip56.toFixed(6)}, need ${stakeAmount.toFixed(6)}`,
         mode: "native",
       });
     }
@@ -209,7 +207,7 @@ export default async function handler(
     const selectedCip56: typeof userCip56 = [];
     let selectedSum = 0;
     for (const c of userCip56) {
-      if (selectedSum >= redeemAmount - 0.000001) break;
+      if (selectedSum >= stakeAmount - 0.000001) break;
       selectedCip56.push(c);
       selectedSum += c.amount;
     }
@@ -217,15 +215,15 @@ export default async function handler(
     // 3a. Reject if any selected token is blacklisted (compliance safety)
     if (selectedCip56.some(c => c.blacklisted)) {
       return res.status(400).json({
-        error: "One or more CIP-56 tokens are blacklisted and cannot be redeemed",
+        error: "One or more CIP-56 tokens are blacklisted and cannot be used for staking",
         mode: "native",
       });
     }
 
-    // 3b. Idempotency check — if same CIDs + amount + party were already processed, return cached result
+    // 3b. Idempotency check
     const sourceCids = selectedCip56.map(c => c.contractId);
-    const idemKey = idempotencyKey(sourceCids, redeemAmount.toFixed(6), userParty);
-    const existing = redeemLog.get(idemKey);
+    const idemKey = idempotencyKey(sourceCids, stakeAmount.toFixed(6), userParty);
+    const existing = stakeLog.get(idemKey);
     if (existing) {
       return res.status(200).json(existing);
     }
@@ -270,9 +268,9 @@ export default async function handler(
     }
 
     const totalOperatorMusd = operatorMusd.reduce((s, c) => s + c.amount, 0);
-    if (totalOperatorMusd < redeemAmount - 0.000001) {
+    if (totalOperatorMusd < stakeAmount - 0.000001) {
       return res.status(409).json({
-        error: `Insufficient operator inventory: have ${totalOperatorMusd.toFixed(6)}, need ${redeemAmount.toFixed(6)}`,
+        error: `Insufficient operator inventory: have ${totalOperatorMusd.toFixed(6)}, need ${stakeAmount.toFixed(6)}`,
         inventoryAvailable: totalOperatorMusd.toFixed(6),
         mode: "native",
       });
@@ -283,24 +281,30 @@ export default async function handler(
     const selectedInventory: typeof operatorMusd = [];
     let inventorySum = 0;
     for (const c of operatorMusd) {
-      if (inventorySum >= redeemAmount - 0.000001) break;
+      if (inventorySum >= stakeAmount - 0.000001) break;
       selectedInventory.push(c);
       inventorySum += c.amount;
     }
 
-    // 6. Query DirectMintService
-    const svcTemplateId = `${PACKAGE_ID}:CantonDirectMint:CantonDirectMintService`;
-    const svcContracts = await queryActiveContracts(operatorParty, offset, svcTemplateId);
-    if (svcContracts.length === 0) {
+    // 6. Query CantonStakingService
+    let stakingService: RawContract | null = null;
+    for (const pkg of V3_PACKAGE_IDS) {
+      const svcTemplateId = `${pkg}:CantonSMUSD:CantonStakingService`;
+      const svcContracts = await queryActiveContracts(operatorParty, offset, svcTemplateId);
+      if (svcContracts.length > 0) {
+        stakingService = svcContracts[0];
+        break;
+      }
+    }
+    if (!stakingService) {
       return res.status(404).json({
-        error: "CantonDirectMintService not found",
+        error: "CantonStakingService not found",
         mode: "native",
       });
     }
-    const directMintService = svcContracts[0];
 
     // 7. Build atomic batch command
-    const commandId = `cip56-redeem-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+    const commandId = `cip56-stake-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
     const commands: unknown[] = [];
     const actAs = Array.from(new Set([userParty, operatorParty]));
     const readAs = actAs;
@@ -320,8 +324,8 @@ export default async function handler(
       });
     }
 
-    // B. Create CIP-56 change for user (if inputs > redeemAmount)
-    const cip56Change = selectedSum - redeemAmount;
+    // B. Create CIP-56 change for user (if inputs > stakeAmount)
+    const cip56Change = selectedSum - stakeAmount;
     if (cip56Change > 0.000001) {
       commands.push({
         CreateCommand: {
@@ -346,7 +350,7 @@ export default async function handler(
         createArguments: {
           issuer: cip56Issuer,
           owner: operatorParty,
-          amount: redeemAmount.toFixed(10),
+          amount: stakeAmount.toFixed(10),
           blacklisted: false,
           agreementHash: refCip56.agreementHash,
           agreementUri: refCip56.agreementUri,
@@ -355,25 +359,25 @@ export default async function handler(
       },
     });
 
-    // D. Exercise DirectMint_RedeemFromInventory
+    // D. Exercise StakeFromInventory
     commands.push({
       ExerciseCommand: {
-        templateId: svcTemplateId,
-        contractId: directMintService.contractId,
-        choice: "DirectMint_RedeemFromInventory",
+        templateId: stakingService.templateId,
+        contractId: stakingService.contractId,
+        choice: "StakeFromInventory",
         choiceArgument: {
           user: userParty,
           inventoryMusdCids: selectedInventory.map(c => c.contractId),
-          redeemAmount: redeemAmount.toFixed(10),
+          stakeAmount: stakeAmount.toFixed(10),
         },
       },
     });
 
     // 8. Submit atomic batch
     console.log(
-      `[canton-cip56-redeem] NATIVE: ${commands.length} cmds, ` +
-      `${selectedCip56.length} CIP-56 → ${selectedInventory.length} inventory → RedeemFromInventory ` +
-      `for ${redeemAmount.toFixed(6)} mUSD, user=${userParty.slice(0, 30)}`
+      `[canton-cip56-stake] NATIVE: ${commands.length} cmds, ` +
+      `${selectedCip56.length} CIP-56 → ${selectedInventory.length} inventory → StakeFromInventory ` +
+      `for ${stakeAmount.toFixed(6)} mUSD, user=${userParty.slice(0, 30)}`
     );
 
     const result = await cantonRequest("POST", "/v2/commands/submit-and-wait", {
@@ -384,26 +388,17 @@ export default async function handler(
       commands,
     });
 
-    // Estimate fee for display (same as DAML: redeemFeeBps / 10000)
-    // We don't know the exact bps from here, but we can read it from the service
-    const redeemFeeBps = typeof directMintService.createArgument.redeemFeeBps === "number"
-      ? directMintService.createArgument.redeemFeeBps
-      : 30;
-    const feeEstimate = redeemAmount * redeemFeeBps / 10000;
-
     // Record idempotency entry
-    const record: RedeemRecord = {
+    const record: StakeRecord = {
       success: true,
       mode: "native",
-      redeemAmount: redeemAmount.toFixed(6),
-      feeEstimate: feeEstimate.toFixed(6),
-      netAmount: (redeemAmount - feeEstimate).toFixed(6),
+      stakeAmount: stakeAmount.toFixed(6),
       commandId,
       cip56Consumed: selectedCip56.length,
       inventoryConsumed: selectedInventory.length,
       timestamp: new Date().toISOString(),
     };
-    redeemLog.set(idemKey, record);
+    stakeLog.set(idemKey, record);
 
     return res.status(200).json({
       ...record,
@@ -412,7 +407,7 @@ export default async function handler(
 
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error("[canton-cip56-redeem] Error:", message);
+    console.error("[canton-cip56-stake] Error:", message);
     return res.status(502).json({ success: false, error: message, mode: "native" });
   }
 }

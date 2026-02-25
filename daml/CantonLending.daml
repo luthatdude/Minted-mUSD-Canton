@@ -1330,6 +1330,81 @@ template CantonLendingService
 
         return (newService, newDebtCid)
 
+    -- | RepayFromInventory: CIP-56-native repay path.
+    -- Uses operator's own CantonMUSD inventory to repay user's debt,
+    -- without requiring an intermediate user-owned CantonMUSD.
+    -- The CIP-56 token archive happens at the API layer (separate package).
+    --
+    -- Flow:
+    --   1. API archives user's CIP-56 tokens (CIP-56 package)
+    --   2. API creates CIP-56 escrow under operator (CIP-56 package)
+    --   3. This choice consumes operator inventory and repays debt
+    --   All submitted as a single atomic batch command.
+    --
+    -- Economic invariants match Lending_Repay:
+    --   - Same interest accrual
+    --   - Same reserve factor calculation
+    --   - Same supply/borrow accounting
+    choice Lending_RepayFromInventory : (ContractId CantonLendingService, ContractId CantonDebtPosition)
+      with
+        user              : Party
+        inventoryMusdCids : [ContractId CantonMUSD]  -- Operator-owned inventory tokens
+        repayAmount       : Money                     -- Exact amount to repay
+        debtCid           : ContractId CantonDebtPosition
+      controller user
+      do
+        assertMsg "NO_INVENTORY_SOURCES" (not (null inventoryMusdCids))
+        assertMsg "BELOW_MIN_REPAY" (repayAmount > 0.0)
+
+        -- Verify debt ownership
+        debt <- fetch debtCid
+        assertMsg "NOT_DEBT_OWNER" (debt.borrower == user)
+
+        -- Validate all inventory mUSD are operator-owned and sum sufficient
+        let validateInv cid = do
+              m <- fetch cid
+              assertMsg "INV_NOT_OPERATOR_OWNED" (m.owner == operator && m.issuer == operator)
+              return m.amount
+        amounts <- mapA validateInv inventoryMusdCids
+        let totalInventory = foldl (+) 0.0 amounts
+        assertMsg "INSUFFICIENT_INVENTORY" (totalInventory >= repayAmount)
+
+        -- Archive all inventory sources
+        _ <- mapA archive inventoryMusdCids
+
+        -- Return change to operator if inventory exceeds repay amount
+        let change = totalInventory - repayAmount
+        if change > 0.0
+          then do
+            create CantonMUSD with
+              issuer = operator
+              owner = operator
+              amount = change
+              agreementHash = mpaHash
+              agreementUri = mpaUri
+              privacyObservers = []
+            pure ()
+          else pure ()
+
+        -- Accrue interest first (same as Lending_Repay)
+        accruedDebtCid <- exercise debtCid Debt_AccrueInterest with caller = user
+
+        -- Reduce debt (same accounting as Lending_Repay)
+        (newDebtCid, interestPaid) <- exercise accruedDebtCid Debt_Repay with
+          repayAmount = repayAmount
+
+        -- Calculate reserve portion of interest
+        let reserveAmount = interestPaid * intToNumeric reserveFactorBps / 10000.0
+        let repayFromBorrows = min repayAmount totalBorrows
+        let repayFromSupply = min repayAmount cantonCurrentSupply
+
+        newService <- create this with
+          totalBorrows = totalBorrows - repayFromBorrows
+          protocolReserves = protocolReserves + reserveAmount
+          cantonCurrentSupply = cantonCurrentSupply - repayFromSupply
+
+        return (newService, newDebtCid)
+
     -- ──────────────────────────────────────────────────────
     --  WITHDRAW COLLATERAL
     -- ──────────────────────────────────────────────────────

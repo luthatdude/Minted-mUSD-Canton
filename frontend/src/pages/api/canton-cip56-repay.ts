@@ -2,22 +2,22 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import * as crypto from "crypto";
 
 /**
- * /api/canton-cip56-redeem — CIP-56 Native Redeem (Phase 3)
+ * /api/canton-cip56-repay — CIP-56 Native Lending Repay (Phase 4)
  *
  * Single atomic batch that:
  *   1. Archives user's CIP-56 tokens
- *   2. Creates CIP-56 change for user (if inputs > redeemAmount)
+ *   2. Creates CIP-56 change for user (if inputs > repayAmount)
  *   3. Creates CIP-56 escrow for operator
- *   4. Exercises DirectMint_RedeemFromInventory on the service
+ *   4. Exercises Lending_RepayFromInventory on the lending service
  *
  * This eliminates the intermediate user-owned CantonMUSD step that the
- * hybrid flow (canton-convert + canton-command) requires.
+ * hybrid flow (canton-convert + Lending_Repay) requires.
  *
- * POST { party: string, amount: string }
- * Returns: { success, mode, redeemAmount, feeEstimate, commandId }
+ * POST { party: string, amount: string, debtCid: string }
+ * Returns: { success, mode, repayAmount, commandId }
  *
  * Falls back cleanly — if this endpoint returns an error, the caller
- * should retry with the hybrid flow (canton-convert → DirectMint_Redeem).
+ * should retry with the hybrid flow (canton-convert → Lending_Repay).
  */
 
 const CANTON_BASE_URL =
@@ -53,23 +53,21 @@ function validateRequiredConfig(): string | null {
 }
 
 // ── Idempotency store ──────────────────────────────────────
-interface RedeemRecord {
+interface RepayRecord {
   success: boolean;
   mode: string;
-  redeemAmount: string;
-  feeEstimate: string;
-  netAmount: string;
+  repayAmount: string;
   commandId: string;
   cip56Consumed: number;
   inventoryConsumed: number;
   timestamp: string;
 }
 
-const redeemLog = new Map<string, RedeemRecord>();
+const repayLog = new Map<string, RepayRecord>();
 
-function idempotencyKey(sourceCids: string[], amount: string, party: string): string {
+function idempotencyKey(sourceCids: string[], amount: string, party: string, debtCid: string): string {
   const sorted = [...sourceCids].sort().join(",");
-  return crypto.createHash("sha256").update(`${sorted}:${amount}:${party}`).digest("hex").slice(0, 32);
+  return crypto.createHash("sha256").update(`repay:${sorted}:${amount}:${party}:${debtCid}`).digest("hex").slice(0, 32);
 }
 
 // ── Canton API helpers ─────────────────────────────────────
@@ -159,7 +157,7 @@ export default async function handler(
     return res.status(500).json({ success: false, error: configError, mode: "native" });
   }
 
-  const { party, amount } = req.body || {};
+  const { party, amount, debtCid } = req.body || {};
 
   if (!party || typeof party !== "string" || !CANTON_PARTY_PATTERN.test(party.trim())) {
     return res.status(400).json({ error: "Invalid Canton party", mode: "native" });
@@ -169,9 +167,13 @@ export default async function handler(
   if (!amount || typeof amount !== "string") {
     return res.status(400).json({ error: "Missing amount", mode: "native" });
   }
-  const redeemAmount = parseFloat(amount);
-  if (!Number.isFinite(redeemAmount) || redeemAmount <= 0) {
+  const repayAmount = parseFloat(amount);
+  if (!Number.isFinite(repayAmount) || repayAmount <= 0) {
     return res.status(400).json({ error: "Amount must be positive", mode: "native" });
+  }
+
+  if (!debtCid || typeof debtCid !== "string" || debtCid.trim().length === 0) {
+    return res.status(400).json({ error: "Missing debtCid", mode: "native" });
   }
 
   const operatorParty = CANTON_PARTY;
@@ -198,9 +200,9 @@ export default async function handler(
       .sort((a, b) => b.amount - a.amount);
 
     const totalCip56 = userCip56.reduce((s, c) => s + c.amount, 0);
-    if (totalCip56 < redeemAmount - 0.000001) {
+    if (totalCip56 < repayAmount - 0.000001) {
       return res.status(400).json({
-        error: `Insufficient CIP-56 balance: have ${totalCip56.toFixed(6)}, need ${redeemAmount.toFixed(6)}`,
+        error: `Insufficient CIP-56 balance: have ${totalCip56.toFixed(6)}, need ${repayAmount.toFixed(6)}`,
         mode: "native",
       });
     }
@@ -209,7 +211,7 @@ export default async function handler(
     const selectedCip56: typeof userCip56 = [];
     let selectedSum = 0;
     for (const c of userCip56) {
-      if (selectedSum >= redeemAmount - 0.000001) break;
+      if (selectedSum >= repayAmount - 0.000001) break;
       selectedCip56.push(c);
       selectedSum += c.amount;
     }
@@ -217,15 +219,15 @@ export default async function handler(
     // 3a. Reject if any selected token is blacklisted (compliance safety)
     if (selectedCip56.some(c => c.blacklisted)) {
       return res.status(400).json({
-        error: "One or more CIP-56 tokens are blacklisted and cannot be redeemed",
+        error: "One or more CIP-56 tokens are blacklisted and cannot be used for repay",
         mode: "native",
       });
     }
 
-    // 3b. Idempotency check — if same CIDs + amount + party were already processed, return cached result
+    // 3b. Idempotency check
     const sourceCids = selectedCip56.map(c => c.contractId);
-    const idemKey = idempotencyKey(sourceCids, redeemAmount.toFixed(6), userParty);
-    const existing = redeemLog.get(idemKey);
+    const idemKey = idempotencyKey(sourceCids, repayAmount.toFixed(6), userParty, debtCid.trim());
+    const existing = repayLog.get(idemKey);
     if (existing) {
       return res.status(200).json(existing);
     }
@@ -270,9 +272,9 @@ export default async function handler(
     }
 
     const totalOperatorMusd = operatorMusd.reduce((s, c) => s + c.amount, 0);
-    if (totalOperatorMusd < redeemAmount - 0.000001) {
+    if (totalOperatorMusd < repayAmount - 0.000001) {
       return res.status(409).json({
-        error: `Insufficient operator inventory: have ${totalOperatorMusd.toFixed(6)}, need ${redeemAmount.toFixed(6)}`,
+        error: `Insufficient operator inventory: have ${totalOperatorMusd.toFixed(6)}, need ${repayAmount.toFixed(6)}`,
         inventoryAvailable: totalOperatorMusd.toFixed(6),
         mode: "native",
       });
@@ -283,24 +285,24 @@ export default async function handler(
     const selectedInventory: typeof operatorMusd = [];
     let inventorySum = 0;
     for (const c of operatorMusd) {
-      if (inventorySum >= redeemAmount - 0.000001) break;
+      if (inventorySum >= repayAmount - 0.000001) break;
       selectedInventory.push(c);
       inventorySum += c.amount;
     }
 
-    // 6. Query DirectMintService
-    const svcTemplateId = `${PACKAGE_ID}:CantonDirectMint:CantonDirectMintService`;
+    // 6. Query CantonLendingService
+    const svcTemplateId = `${PACKAGE_ID}:CantonLending:CantonLendingService`;
     const svcContracts = await queryActiveContracts(operatorParty, offset, svcTemplateId);
     if (svcContracts.length === 0) {
       return res.status(404).json({
-        error: "CantonDirectMintService not found",
+        error: "CantonLendingService not found",
         mode: "native",
       });
     }
-    const directMintService = svcContracts[0];
+    const lendingService = svcContracts[0];
 
     // 7. Build atomic batch command
-    const commandId = `cip56-redeem-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+    const commandId = `cip56-repay-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
     const commands: unknown[] = [];
     const actAs = Array.from(new Set([userParty, operatorParty]));
     const readAs = actAs;
@@ -320,8 +322,8 @@ export default async function handler(
       });
     }
 
-    // B. Create CIP-56 change for user (if inputs > redeemAmount)
-    const cip56Change = selectedSum - redeemAmount;
+    // B. Create CIP-56 change for user (if inputs > repayAmount)
+    const cip56Change = selectedSum - repayAmount;
     if (cip56Change > 0.000001) {
       commands.push({
         CreateCommand: {
@@ -346,7 +348,7 @@ export default async function handler(
         createArguments: {
           issuer: cip56Issuer,
           owner: operatorParty,
-          amount: redeemAmount.toFixed(10),
+          amount: repayAmount.toFixed(10),
           blacklisted: false,
           agreementHash: refCip56.agreementHash,
           agreementUri: refCip56.agreementUri,
@@ -355,25 +357,26 @@ export default async function handler(
       },
     });
 
-    // D. Exercise DirectMint_RedeemFromInventory
+    // D. Exercise Lending_RepayFromInventory
     commands.push({
       ExerciseCommand: {
         templateId: svcTemplateId,
-        contractId: directMintService.contractId,
-        choice: "DirectMint_RedeemFromInventory",
+        contractId: lendingService.contractId,
+        choice: "Lending_RepayFromInventory",
         choiceArgument: {
           user: userParty,
           inventoryMusdCids: selectedInventory.map(c => c.contractId),
-          redeemAmount: redeemAmount.toFixed(10),
+          repayAmount: repayAmount.toFixed(10),
+          debtCid: debtCid.trim(),
         },
       },
     });
 
     // 8. Submit atomic batch
     console.log(
-      `[canton-cip56-redeem] NATIVE: ${commands.length} cmds, ` +
-      `${selectedCip56.length} CIP-56 → ${selectedInventory.length} inventory → RedeemFromInventory ` +
-      `for ${redeemAmount.toFixed(6)} mUSD, user=${userParty.slice(0, 30)}`
+      `[canton-cip56-repay] NATIVE: ${commands.length} cmds, ` +
+      `${selectedCip56.length} CIP-56 → ${selectedInventory.length} inventory → RepayFromInventory ` +
+      `for ${repayAmount.toFixed(6)} mUSD, user=${userParty.slice(0, 30)}`
     );
 
     const result = await cantonRequest("POST", "/v2/commands/submit-and-wait", {
@@ -384,26 +387,17 @@ export default async function handler(
       commands,
     });
 
-    // Estimate fee for display (same as DAML: redeemFeeBps / 10000)
-    // We don't know the exact bps from here, but we can read it from the service
-    const redeemFeeBps = typeof directMintService.createArgument.redeemFeeBps === "number"
-      ? directMintService.createArgument.redeemFeeBps
-      : 30;
-    const feeEstimate = redeemAmount * redeemFeeBps / 10000;
-
     // Record idempotency entry
-    const record: RedeemRecord = {
+    const record: RepayRecord = {
       success: true,
       mode: "native",
-      redeemAmount: redeemAmount.toFixed(6),
-      feeEstimate: feeEstimate.toFixed(6),
-      netAmount: (redeemAmount - feeEstimate).toFixed(6),
+      repayAmount: repayAmount.toFixed(6),
       commandId,
       cip56Consumed: selectedCip56.length,
       inventoryConsumed: selectedInventory.length,
       timestamp: new Date().toISOString(),
     };
-    redeemLog.set(idemKey, record);
+    repayLog.set(idemKey, record);
 
     return res.status(200).json({
       ...record,
@@ -412,7 +406,7 @@ export default async function handler(
 
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error("[canton-cip56-redeem] Error:", message);
+    console.error("[canton-cip56-repay] Error:", message);
     return res.status(502).json({ success: false, error: message, mode: "native" });
   }
 }
