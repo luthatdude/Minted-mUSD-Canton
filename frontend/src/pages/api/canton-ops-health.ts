@@ -32,6 +32,10 @@ const INVENTORY_FLOOR = Math.max(
   0,
   parseInt(process.env.CANTON_OPERATOR_INVENTORY_FLOOR || "2000", 10) || 2000
 );
+const INVENTORY_BUFFER = Math.max(
+  0,
+  parseInt(process.env.CANTON_OPERATOR_INVENTORY_BUFFER || "1000", 10) || 1000
+);
 
 function validateRequiredConfig(): string | null {
   if (!CANTON_PARTY || !CANTON_PARTY_PATTERN.test(CANTON_PARTY))
@@ -206,7 +210,8 @@ export default async function handler(
     const blockers: string[] = [];
     if (userCip56Balance + userRedeemableBalance <= 0) blockers.push("NO_BALANCE");
     if (userCip56Balance > 0 && operatorInventory <= 0) blockers.push("NO_OPERATOR_INVENTORY");
-    if (userCip56Balance > operatorInventory && operatorInventory > 0) blockers.push("LOW_OPERATOR_INVENTORY");
+    if (operatorInventory > 0 && operatorInventory < floorTarget + INVENTORY_BUFFER) blockers.push("LOW_OPERATOR_INVENTORY");
+    if (userCip56Balance > operatorInventory && operatorInventory > 0) blockers.push("CAPACITY_LIMITED");
 
     // Status classification
     const status: "OK" | "LOW" | "EMPTY" =

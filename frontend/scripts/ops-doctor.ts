@@ -142,9 +142,14 @@ async function runApiAndHealthChecks(): Promise<OpsHealthResponse | null> {
 
     const inv = parseFloat(data.operatorInventory);
     const floor = data.floorTarget;
+    const buffer = 1000;
     check("inventory >= floor", "health",
       inv >= floor,
       `inventory=${inv.toFixed(2)} floor=${floor}`);
+    check("inventory >= floor+buffer", "health",
+      inv >= floor + buffer,
+      `inventory=${inv.toFixed(2)} threshold=${floor + buffer}`,
+      true /* warnOnly */);
 
     const maxBridge = parseFloat(data.maxBridgeable);
     check("maxBridgeable > 0", "health",

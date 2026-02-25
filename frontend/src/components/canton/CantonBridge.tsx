@@ -545,13 +545,20 @@ export function CantonBridge() {
             {preflightBlockers.includes("LOW_OPERATOR_INVENTORY") && !preflightBlockers.includes("NO_OPERATOR_INVENTORY") && (
               <div className="mt-2 rounded-lg bg-yellow-500/10 border border-yellow-500/20 px-3 py-2">
                 <p className="text-xs text-yellow-300">
-                  Operator conversion inventory ({operatorInventory.toFixed(2)} mUSD) is lower than your CIP-56 balance. Max bridgeable is capped at {maxBridgeable.toFixed(2)} mUSD.
+                  Operator conversion inventory ({operatorInventory.toFixed(2)} mUSD) is below the healthy threshold. Replenishment may be needed.
                 </p>
                 {opsHealth && parseFloat(opsHealth.floorDeficit) > 0 && (
                   <p className="text-xs text-yellow-400/70 mt-1">
                     Floor target: {opsHealth.floorTarget.toLocaleString()} mUSD — deficit: {parseFloat(opsHealth.floorDeficit).toLocaleString(undefined, { maximumFractionDigits: 0 })} mUSD below target.
                   </p>
                 )}
+              </div>
+            )}
+            {preflightBlockers.includes("CAPACITY_LIMITED") && !preflightBlockers.includes("NO_OPERATOR_INVENTORY") && (
+              <div className="mt-2 rounded-lg bg-blue-500/10 border border-blue-500/20 px-3 py-2">
+                <p className="text-xs text-blue-300">
+                  Your CIP-56 balance exceeds operator conversion inventory. Max bridgeable is capped at {maxBridgeable.toFixed(2)} mUSD.
+                </p>
               </div>
             )}
           </div>

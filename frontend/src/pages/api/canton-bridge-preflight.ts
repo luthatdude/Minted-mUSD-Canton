@@ -26,6 +26,14 @@ const CIP56_PACKAGE_ID =
   "";
 const CANTON_PARTY_PATTERN = /^[A-Za-z0-9._:-]+::1220[0-9a-f]{64}$/i;
 const PKG_ID_PATTERN = /^[0-9a-f]{64}$/i;
+const INVENTORY_FLOOR = Math.max(
+  0,
+  parseInt(process.env.CANTON_OPERATOR_INVENTORY_FLOOR || "2000", 10) || 2000
+);
+const INVENTORY_BUFFER = Math.max(
+  0,
+  parseInt(process.env.CANTON_OPERATOR_INVENTORY_BUFFER || "1000", 10) || 1000
+);
 
 function validateRequiredConfig(): string | null {
   if (!CANTON_PARTY || !CANTON_PARTY_PATTERN.test(CANTON_PARTY))
@@ -203,8 +211,11 @@ export default async function handler(
     if (userCip56Balance > 0 && operatorInventory <= 0) {
       blockers.push("NO_OPERATOR_INVENTORY");
     }
-    if (userCip56Balance > operatorInventory && operatorInventory > 0) {
+    if (operatorInventory > 0 && operatorInventory < INVENTORY_FLOOR + INVENTORY_BUFFER) {
       blockers.push("LOW_OPERATOR_INVENTORY");
+    }
+    if (userCip56Balance > operatorInventory && operatorInventory > 0) {
+      blockers.push("CAPACITY_LIMITED");
     }
 
     res.setHeader("Cache-Control", "no-store, max-age=0");
