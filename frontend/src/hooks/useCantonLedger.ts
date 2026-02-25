@@ -272,6 +272,42 @@ export async function fetchBridgePreflight(party: string): Promise<BridgePreflig
 }
 
 /**
+ * Operator inventory health check — includes floor target and deficit.
+ */
+export interface OpsHealthData {
+  party: string;
+  operatorParty: string;
+  userCip56Balance: string;
+  userRedeemableBalance: string;
+  operatorInventory: string;
+  maxBridgeable: string;
+  floorTarget: number;
+  floorDeficit: string;
+  status: "OK" | "LOW" | "EMPTY";
+  blockers: string[];
+  ledgerOffset: number;
+  timestamp: string;
+}
+
+export async function fetchOpsHealth(party: string): Promise<OpsHealthData> {
+  const normalized = normalizeCantonParty(party);
+  if (!normalized) throw new Error("Invalid party for ops health");
+  const resp = await fetch(`/api/canton-ops-health?party=${encodeURIComponent(normalized)}`, {
+    cache: "no-store",
+  });
+  const contentType = resp.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    const text = await resp.text().catch(() => "Unknown error");
+    throw new Error(`HTTP ${resp.status}: ${text.slice(0, 300)}`);
+  }
+  const result = await resp.json();
+  if (!resp.ok || result.error) {
+    throw new Error(result.error || `HTTP ${resp.status}`);
+  }
+  return result;
+}
+
+/**
  * Convert CIP-56 mUSD → redeemable CantonMUSD via server-side inventory swap.
  * Returns the conversion result or throws on failure.
  */

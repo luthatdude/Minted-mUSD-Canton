@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "ops:health": "curl -s http://localhost:3001/api/canton-ops-health?party=minted-canary::122006df00c631440327e68ba87f61795bbcd67db26142e580137e5038649f22edce | node -e \"process.stdin.on('data',d=>console.log(JSON.stringify(JSON.parse(d),null,2)))\"",
+    "ops:topup": "npx ts-node --skip-project scripts/topup-operator-inventory.ts",
+    "ops:canary": "npx ts-node --skip-project scripts/cip56-bridge-canary.ts"
   },
   "dependencies": {
     "@fivenorth/loop-sdk": "^0.7.6",

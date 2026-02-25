@@ -200,6 +200,17 @@ export default async function handler(
       }
 
       const createPayload = payload as Record<string, unknown>;
+
+      // Safe default: inject privacyObservers:[] for token templates that require it.
+      // Does NOT override if caller already provides the field.
+      const entityName = resolvedTemplateId.split(":").pop() || "";
+      const needsPrivacyObservers = new Set([
+        "CantonMUSD", "CantonUSDC", "USDCx", "CantonCoin",
+      ]);
+      if (needsPrivacyObservers.has(entityName) && !("privacyObservers" in createPayload)) {
+        createPayload.privacyObservers = [];
+      }
+
       const createActAs = shouldOperatorCosignCreate(resolvedTemplateId, createPayload, actAsParty)
         ? Array.from(new Set([actAsParty, CANTON_PARTY]))
         : [actAsParty];

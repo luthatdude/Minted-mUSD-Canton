@@ -3,7 +3,7 @@ import { ethers } from "ethers";
 import { BLE_BRIDGE_V9_ABI } from "@/abis/BLEBridgeV9";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
-import { useCantonLedger, cantonExercise, fetchFreshBalances, convertCip56ToRedeemable, fetchBridgePreflight, type BridgePreflightData } from "@/hooks/useCantonLedger";
+import { useCantonLedger, cantonExercise, fetchFreshBalances, convertCip56ToRedeemable, fetchBridgePreflight, fetchOpsHealth, type BridgePreflightData, type OpsHealthData } from "@/hooks/useCantonLedger";
 import { useLoopWallet } from "@/hooks/useLoopWallet";
 import { CONTRACTS } from "@/lib/config";
 import { formatTimestamp, formatUSD } from "@/lib/format";
@@ -33,6 +33,7 @@ export function CantonBridge() {
   const [txStatus, setTxStatus] = useState<TxStatus>("idle");
   const [txError, setTxError] = useState<string | null>(null);
   const [preflight, setPreflight] = useState<BridgePreflightData | null>(null);
+  const [opsHealth, setOpsHealth] = useState<OpsHealthData | null>(null);
   const [ethBridge, setEthBridge] = useState<EthereumBridgeData>({
     attestedAssets: 0n,
     supplyCap: 0n,
@@ -49,8 +50,12 @@ export function CantonBridge() {
   const loadPreflight = useCallback(async () => {
     if (!activeParty) return;
     try {
-      const pf = await fetchBridgePreflight(activeParty);
+      const [pf, oh] = await Promise.all([
+        fetchBridgePreflight(activeParty),
+        fetchOpsHealth(activeParty).catch(() => null),
+      ]);
       setPreflight(pf);
+      if (oh) setOpsHealth(oh);
     } catch (err) {
       console.warn("[CantonBridge] Preflight fetch failed:", err);
     }
@@ -503,6 +508,11 @@ export function CantonBridge() {
                 <p className="text-xs text-yellow-300">
                   Operator conversion inventory ({operatorInventory.toFixed(2)} mUSD) is lower than your CIP-56 balance. Max bridgeable is capped at {maxBridgeable.toFixed(2)} mUSD.
                 </p>
+                {opsHealth && parseFloat(opsHealth.floorDeficit) > 0 && (
+                  <p className="text-xs text-yellow-400/70 mt-1">
+                    Floor target: {opsHealth.floorTarget.toLocaleString()} mUSD — deficit: {parseFloat(opsHealth.floorDeficit).toLocaleString(undefined, { maximumFractionDigits: 0 })} mUSD below target.
+                  </p>
+                )}
               </div>
             )}
           </div>
