@@ -185,12 +185,13 @@ export function CantonStake() {
           setAmount(""); await refresh();
           return;
         }
-        // Business errors surface immediately; infra errors fall through to hybrid
+        // Infra errors (409 inventory / 5xx) fall through to hybrid; everything else surfaces
         const status = nativeResult.httpStatus ?? 0;
-        if (status === 400 || status === 404) {
+        if (status === 409 || (status >= 500 && status < 600)) {
+          console.warn("[CantonStake] Native stake infra error, falling back to hybrid:", nativeResult.error);
+        } else {
           throw new Error(nativeResult.error || "Stake rejected");
         }
-        console.warn("[CantonStake] Native stake infra error, falling back to hybrid:", nativeResult.error);
       }
 
       // ── HYBRID FALLBACK PATH ──────────────────────────────────
@@ -199,7 +200,8 @@ export function CantonStake() {
       const redeemableTotal = freshTokens.reduce((s, t) => s + parseFloat(t.amount || "0"), 0);
       if (redeemableTotal < parsedAmount - 0.000001) {
         try {
-          const cip56Bal = preflight ? parseFloat(preflight.userCip56Balance) : 0;
+          const hybridPreflight = preflight ?? await fetchBridgePreflight(activeParty).catch(() => null);
+          const cip56Bal = hybridPreflight ? parseFloat(hybridPreflight.userCip56Balance) : 0;
           if (cip56Bal > 0) {
             const convertNeeded = Math.min(parsedAmount - redeemableTotal, cip56Bal);
             const convResult = await convertCip56ToRedeemable(activeParty, convertNeeded);

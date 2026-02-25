@@ -411,12 +411,13 @@ export function CantonBorrow() {
             setAmount(""); refresh();
             return;
           }
-          // Business errors surface immediately; infra errors fall through to hybrid
+          // Infra errors (409 inventory / 5xx) fall through to hybrid; everything else surfaces
           const status = nativeResult.httpStatus ?? 0;
-          if (status === 400 || status === 404) {
+          if (status === 409 || (status >= 500 && status < 600)) {
+            console.warn("[CantonBorrow] Native repay infra error, falling back to hybrid:", nativeResult.error);
+          } else {
             throw new Error(nativeResult.error || "Repay rejected");
           }
-          console.warn("[CantonBorrow] Native repay infra error, falling back to hybrid:", nativeResult.error);
         }
 
         // ── HYBRID FALLBACK PATH ──────────────────────────────────

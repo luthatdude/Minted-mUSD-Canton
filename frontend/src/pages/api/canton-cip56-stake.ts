@@ -189,6 +189,7 @@ export default async function handler(
         templateId: c.templateId,
         amount: parseFloat((c.createArgument.amount as string) || "0"),
         issuer: (c.createArgument.issuer as string) || operatorParty,
+        blacklisted: (c.createArgument.blacklisted as boolean) ?? false,
         agreementHash: (c.createArgument.agreementHash as string) || "",
         agreementUri: (c.createArgument.agreementUri as string) || "",
       }))
@@ -209,6 +210,14 @@ export default async function handler(
       if (selectedSum >= stakeAmount - 0.000001) break;
       selectedCip56.push(c);
       selectedSum += c.amount;
+    }
+
+    // 3a. Reject if any selected token is blacklisted (compliance safety)
+    if (selectedCip56.some(c => c.blacklisted)) {
+      return res.status(400).json({
+        error: "One or more CIP-56 tokens are blacklisted and cannot be used for staking",
+        mode: "native",
+      });
     }
 
     // 3b. Idempotency check
