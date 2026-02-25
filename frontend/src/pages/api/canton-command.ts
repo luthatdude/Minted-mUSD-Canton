@@ -18,16 +18,23 @@ import * as crypto from "crypto";
 const CANTON_BASE_URL =
   process.env.CANTON_API_URL ||
   `http://${process.env.CANTON_HOST || "localhost"}:${process.env.CANTON_PORT || "7575"}`;
-const CANTON_TOKEN = process.env.CANTON_TOKEN || "dummy-no-auth";
-const CANTON_PARTY =
-  process.env.CANTON_PARTY ||
-  "minted-validator-1::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
+const CANTON_TOKEN = process.env.CANTON_TOKEN || "";
+const CANTON_PARTY = process.env.CANTON_PARTY || "";
 const RECIPIENT_ALIAS_MAP_RAW = process.env.CANTON_RECIPIENT_PARTY_ALIASES || "";
 const CANTON_PARTY_PATTERN = /^[A-Za-z0-9._:-]+::1220[0-9a-f]{64}$/i;
+const PKG_ID_PATTERN = /^[0-9a-f]{64}$/i;
 const CANTON_USER = process.env.CANTON_USER || "administrator";
 const PACKAGE_ID =
   process.env.NEXT_PUBLIC_DAML_PACKAGE_ID ||
-  "0489a86388cc81e3e0bee8dc8f6781229d0e01451c1f2d19deea594255e5993b";
+  process.env.CANTON_PACKAGE_ID ||
+  "";
+
+function validateRequiredConfig(): string | null {
+  if (!CANTON_PARTY || !CANTON_PARTY_PATTERN.test(CANTON_PARTY))
+    return "CANTON_PARTY not configured";
+  // PACKAGE_ID validated conditionally per-request: required only for short-name templates
+  return null;
+}
 const ALLOW_OPERATOR_FALLBACK =
   (process.env.CANTON_ALLOW_OPERATOR_FALLBACK || "").toLowerCase() === "true";
 
@@ -152,10 +159,20 @@ export default async function handler(
     return res.status(405).json({ error: "Method not allowed" });
   }
 
+  const configError = validateRequiredConfig();
+  if (configError) {
+    return res.status(500).json({ success: false, error: configError });
+  }
+
   const { action, templateId, contractId, choice, argument, payload, party } = req.body || {};
 
   if (!templateId) {
     return res.status(400).json({ error: "Missing templateId" });
+  }
+
+  // PACKAGE_ID required for short-name templates (no ':'), not for fully-qualified
+  if (!templateId.includes(":") && (!PACKAGE_ID || !PKG_ID_PATTERN.test(PACKAGE_ID))) {
+    return res.status(500).json({ success: false, error: "CANTON_PACKAGE_ID/NEXT_PUBLIC_DAML_PACKAGE_ID not configured" });
   }
 
   let resolvedTemplateId: string;

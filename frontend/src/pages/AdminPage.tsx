@@ -18,7 +18,8 @@ type AdminSection = "emergency" | "musd" | "directmint" | "treasury" | "vaults" 
 const CANTON_PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || "";
 const CANTON_OPERATOR_PARTY =
   process.env.NEXT_PUBLIC_CANTON_OPERATOR_PARTY ||
-  "minted-validator-1::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
+  process.env.NEXT_PUBLIC_CANTON_PARTY ||
+  "";
 const CANTON_FAUCET_TEMPLATES = {
   CantonUSDC: `${CANTON_PACKAGE_ID}:CantonDirectMint:CantonUSDC`,
   USDCx: `${CANTON_PACKAGE_ID}:CantonDirectMint:USDCx`,
@@ -445,6 +446,10 @@ export function AdminPage() {
     const numericAmount = Number(trimmedAmount);
     if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
       setFaucetStatus({ error: "Enter a valid Canton faucet amount." });
+      return;
+    }
+    if (!CANTON_OPERATOR_PARTY) {
+      setFaucetStatus({ error: "Canton operator party not configured. Set NEXT_PUBLIC_CANTON_OPERATOR_PARTY or NEXT_PUBLIC_CANTON_PARTY." });
       return;
     }
     if (!CANTON_PACKAGE_ID) {
@@ -1511,6 +1516,11 @@ export function AdminPage() {
 
           <div className="card">
             <h3 className="mb-3 font-semibold text-gray-300">Canton Faucet</h3>
+            {!CANTON_OPERATOR_PARTY && (
+              <div className="mb-3 rounded-lg border border-orange-700/40 bg-orange-900/20 p-3 text-sm text-orange-300">
+                Canton operator party not configured. Set NEXT_PUBLIC_CANTON_OPERATOR_PARTY or NEXT_PUBLIC_CANTON_PARTY to enable Canton faucet minting.
+              </div>
+            )}
             <div className="grid gap-3 sm:grid-cols-3">
               <div>
                 <label className="label">Canton USDC Amount</label>
@@ -1519,7 +1529,7 @@ export function AdminPage() {
                   className="mt-2 w-full"
                   onClick={() => mintCantonFaucetToken("CantonUSDC", cantonUsdcAmount)}
                   loading={faucetLoadingKey === "canton-CantonUSDC"}
-                  disabled={faucetLoadingKey !== null}
+                  disabled={faucetLoadingKey !== null || !CANTON_OPERATOR_PARTY}
                 >
                   Mint Canton USDC
                 </TxButton>
@@ -1531,7 +1541,7 @@ export function AdminPage() {
                   className="mt-2 w-full"
                   onClick={() => mintCantonFaucetToken("USDCx", cantonUsdcxAmount)}
                   loading={faucetLoadingKey === "canton-USDCx"}
-                  disabled={faucetLoadingKey !== null}
+                  disabled={faucetLoadingKey !== null || !CANTON_OPERATOR_PARTY}
                 >
                   Mint USDCx
                 </TxButton>
@@ -1543,7 +1553,7 @@ export function AdminPage() {
                   className="mt-2 w-full"
                   onClick={() => mintCantonFaucetToken("CantonCoin", cantonCoinAmount)}
                   loading={faucetLoadingKey === "canton-CantonCoin"}
-                  disabled={faucetLoadingKey !== null}
+                  disabled={faucetLoadingKey !== null || !CANTON_OPERATOR_PARTY}
                 >
                   Mint Canton Coin
                 </TxButton>

@@ -18,7 +18,8 @@ const templates = {
 
 const CANTON_OPERATOR_PARTY =
   process.env.NEXT_PUBLIC_CANTON_OPERATOR_PARTY ||
-  "minted-validator-1::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
+  process.env.NEXT_PUBLIC_CANTON_PARTY ||
+  "";
 
 const CANTON_FAUCET_TEMPLATES = {
   CantonUSDC: `${PACKAGE_ID}:CantonDirectMint:CantonUSDC`,
@@ -83,6 +84,10 @@ export function CantonAdmin() {
     const party = activeParty;
     const trimmed = amount.trim();
     const numeric = Number(trimmed);
+    if (!CANTON_OPERATOR_PARTY) {
+      setError("Canton operator party not configured (NEXT_PUBLIC_CANTON_OPERATOR_PARTY or NEXT_PUBLIC_CANTON_PARTY).");
+      return;
+    }
     if (!party) {
       setError("Connect your Loop wallet party first.");
       return;
