@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import { StatCard } from "@/components/StatCard";
 import { PageHeader } from "@/components/PageHeader";
 import { Section } from "@/components/Section";
+import { ProtocolStatsBlock } from "@/components/ProtocolStatsBlock";
 import { useCantonLedger } from "@/hooks/useCantonLedger";
 import { useLoopWallet } from "@/hooks/useLoopWallet";
 import { CantonMint } from "@/components/canton/CantonMint";
@@ -121,13 +122,6 @@ export function CantonDashboard() {
     num(data.boostPoolService?.totalCantonDeposited) * ctnPrice;
 
   const visibleSupply = num(data.lendingService?.cantonCurrentSupply) || musdUsd;
-  const supplyCap = num(data.lendingService?.cantonSupplyCap);
-  const utilizationPct = supplyCap > 0 ? (visibleSupply / supplyCap) * 100 : 0;
-
-  const totalShares =
-    num(data.stakingService?.totalShares) +
-    num(data.ethPoolService?.totalShares) +
-    num(data.boostPoolService?.totalLPShares);
 
   const userLabel = activeParty ? activeParty.split("::")[0] : "Loop User";
   const isAtRisk = Number.isFinite(healthFactor) && healthFactor < 1.0;
@@ -313,36 +307,20 @@ export function CantonDashboard() {
 
       {activeTab === "protocol" && (
         <>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <StatCard label="Protocol TVL" value={`$${protocolTvl.toFixed(2)}`} color="green" />
-            <StatCard label="Canton mUSD Supply" value={visibleSupply.toFixed(2)} color="blue" />
-            <StatCard label="Total Staked Shares" value={totalShares.toFixed(2)} color="purple" />
-            <StatCard label="Supply Utilization" value={`${utilizationPct.toFixed(2)}%`} color="yellow" />
-          </div>
-
-          <Section title="Protocol Services" subtitle="Live service contracts discovered on Canton">
-            <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-4">
-              {[
-                { label: "Bridge Service", active: !!data.bridgeService, detail: data.bridgeService ? `Nonce ${data.bridgeService.lastNonce}` : "Not deployed" },
-                { label: "Supply Service", active: !!data.supplyService, detail: data.supplyService ? "Deployed" : "Not deployed" },
-                { label: "Staking Service", active: !!data.stakingService, detail: data.stakingService ? `Share ${num(data.stakingService.sharePrice).toFixed(4)}` : "Not deployed" },
-                { label: "ETH Pool", active: !!data.ethPoolService, detail: data.ethPoolService ? `Share ${num(data.ethPoolService.sharePrice).toFixed(4)}` : "Not deployed" },
-                { label: "Boost Pool", active: !!data.boostPoolService, detail: data.boostPoolService ? `CTN ${num(data.boostPoolService.cantonPriceMusd).toFixed(4)}` : "Not deployed" },
-                { label: "Lending Service", active: !!data.lendingService, detail: data.lendingService ? `Rate ${(num(data.lendingService.interestRateBps) / 100).toFixed(2)}%` : "Not deployed" },
-                { label: "DirectMint Service", active: !!data.directMintService, detail: data.directMintService ? (data.directMintService.paused ? "Paused" : "Active") : "Not deployed" },
-                { label: "Price Feeds", active: data.priceFeeds.length > 0, detail: `${data.priceFeeds.length} feeds` },
-              ].map((svc) => (
-                <div key={svc.label} className={`card text-center transition-all duration-300 ${svc.active ? "border-emerald-500/30 hover:border-emerald-500/50" : "opacity-60"}`}>
-                  <div className={`mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl ${svc.active ? "bg-emerald-500/10 text-emerald-400" : "bg-gray-800 text-gray-600"}`}>
-                    <span className={`h-3 w-3 rounded-full ${svc.active ? "bg-emerald-400 animate-pulse" : "bg-gray-600"}`} />
-                  </div>
-                  <div className={`mb-1 text-sm font-bold ${svc.active ? "text-emerald-400" : "text-gray-600"}`}>{svc.active ? "Active" : "Inactive"}</div>
-                  <div className="text-xs text-gray-400">{svc.label}</div>
-                  <div className="mt-1 text-xs text-gray-500">{svc.detail}</div>
-                </div>
-              ))}
-            </div>
-          </Section>
+          <ProtocolStatsBlock
+            apyLabel={
+              data.lendingService
+                ? `${(num(data.lendingService.interestRateBps) / 100).toFixed(2)}%`
+                : "--%"
+            }
+            totalSupply={`$${visibleSupply.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+            totalStaked={`$${protocolTvl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+            stakedSubValue={
+              data.stakingService
+                ? `Share Price: ${num(data.stakingService.sharePrice).toFixed(4)} mUSD`
+                : "Staking service not deployed"
+            }
+          />
 
           <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
             <p className="mb-1 text-xs font-medium uppercase tracking-wider text-gray-500">Canton Party</p>
