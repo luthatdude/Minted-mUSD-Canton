@@ -4,6 +4,7 @@ import { BLE_BRIDGE_V9_ABI } from "@/abis/BLEBridgeV9";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
 import { useCantonLedger, cantonExercise, fetchFreshBalances, convertCip56ToRedeemable, nativeCip56Redeem, fetchBridgePreflight, fetchOpsHealth, type BridgePreflightData, type OpsHealthData } from "@/hooks/useCantonLedger";
+import { HYBRID_FALLBACK_ENABLED } from "@/lib/api-hardening/fallback";
 import { useLoopWallet } from "@/hooks/useLoopWallet";
 import { CONTRACTS } from "@/lib/config";
 import { formatTimestamp, formatUSD } from "@/lib/format";
@@ -186,16 +187,19 @@ export function CantonBridge() {
         // Native failed — classify the error before deciding whether to fall back.
         // Business errors (400: blacklisted, paused, insufficient balance, below min)
         // should surface immediately. Only infra errors (502/5xx, 409 inventory)
-        // warrant falling back to the hybrid flow.
+        // warrant falling back to the hybrid flow when explicitly enabled.
         const status = nativeResult.httpStatus ?? 0;
         const isBizError = status === 400 || status === 404;
         if (isBizError) {
           throw new Error(nativeResult.error || "Redeem rejected");
         }
+        if (!HYBRID_FALLBACK_ENABLED) {
+          throw new Error(nativeResult.error || "Native CIP-56 redeem failed. Hybrid fallback is disabled.");
+        }
         console.warn("[CantonBridge] Native redeem infra error, falling back to hybrid:", nativeResult.error);
       }
 
-      // ── HYBRID FALLBACK PATH ───────────────────────────────────
+      // ── HYBRID FALLBACK PATH (emergency only, requires NEXT_PUBLIC_ENABLE_HYBRID_FALLBACK=true) ──
       // Auto-convert CIP-56 → redeemable if user doesn't have enough legacy tokens
       if (needsConversion) {
         const convertNeeded = parsedAmount - redeemableMusd;

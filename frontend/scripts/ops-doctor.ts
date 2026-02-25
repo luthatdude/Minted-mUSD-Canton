@@ -98,6 +98,13 @@ function runEnvChecks(): void {
   check("NEXT_PUBLIC_CIP56_PACKAGE_ID format", "env",
     PKG_ID_RE.test(cip56Id),
     cip56Id ? `${cip56Id.slice(0, 16)}...` : "(empty)");
+
+  const hybridClient = process.env.NEXT_PUBLIC_ENABLE_HYBRID_FALLBACK || "false";
+  const hybridServer = process.env.ENABLE_HYBRID_FALLBACK || "false";
+  check("hybrid fallback disabled (native-only)", "env",
+    hybridClient !== "true" && hybridServer !== "true",
+    `client=${hybridClient} server=${hybridServer}`,
+    true /* warnOnly — not a hard failure if enabled for emergency */);
 }
 
 // ── API checks ──────────────────────────────────────────────

@@ -1,9 +1,11 @@
 /**
  * Canonical fallback classification for CIP-56 native → hybrid flows.
  *
- * The strict policy is:
- *   - Infra/transient errors (409, 5xx, network timeout) → ALLOW fallback to hybrid
- *   - Business/policy errors (400, 401, 403, 404) → BLOCK fallback, surface to user
+ * Default policy (CIP-56 full migration):
+ *   - Hybrid fallback is DISABLED unless NEXT_PUBLIC_ENABLE_HYBRID_FALLBACK=true
+ *   - When disabled, ALL native failures surface to the user (no silent retries)
+ *   - When enabled, infra/transient errors (409, 5xx, network timeout) → ALLOW fallback
+ *   - Business/policy errors (400, 401, 403, 404) → ALWAYS BLOCK fallback
  *
  * This module provides a single source of truth so that frontend components
  * (CantonBorrow, CantonStake, CantonBridge) and API endpoints use identical
@@ -16,6 +18,14 @@ export interface FallbackResult {
   decision: FallbackDecision;
   reason: string;
 }
+
+/**
+ * Whether the hybrid fallback emergency path is enabled.
+ * Default: false (native-only). Set NEXT_PUBLIC_ENABLE_HYBRID_FALLBACK=true to enable.
+ */
+export const HYBRID_FALLBACK_ENABLED =
+  typeof process !== "undefined" &&
+  process.env?.NEXT_PUBLIC_ENABLE_HYBRID_FALLBACK === "true";
 
 /**
  * Classify an HTTP status code for fallback eligibility.
@@ -45,8 +55,10 @@ export function classifyFallback(status: number): FallbackResult {
 
 /**
  * Convenience: returns true if hybrid fallback is allowed for this status.
+ * Returns false when HYBRID_FALLBACK_ENABLED is false (native-only mode).
  */
 export function isFallbackAllowed(status: number): boolean {
+  if (!HYBRID_FALLBACK_ENABLED) return false;
   return classifyFallback(status).decision === "allow";
 }
 
