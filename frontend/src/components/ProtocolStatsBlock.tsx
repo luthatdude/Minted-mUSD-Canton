@@ -25,7 +25,7 @@ export function ProtocolStatsBlock({
         <div className="grid gap-8 lg:grid-cols-3">
           <div className="space-y-2">
             <p className="text-sm font-medium text-gray-400">mUSD APY %</p>
-            <p className="text-4xl font-bold text-emerald-400">{apyLabel}</p>
+            <p className="text-4xl font-bold text-gradient-emerald">{apyLabel}</p>
           </div>
           <div className="space-y-2">
             <p className="text-sm font-medium text-gray-400">Total Supply</p>
