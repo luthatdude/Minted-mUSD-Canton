@@ -448,6 +448,10 @@ export function AdminPage() {
       setFaucetStatus({ error: "Enter a valid Canton faucet amount." });
       return;
     }
+    if (!CANTON_OPERATOR_PARTY) {
+      setFaucetStatus({ error: "Canton operator party not configured. Set NEXT_PUBLIC_CANTON_OPERATOR_PARTY or NEXT_PUBLIC_CANTON_PARTY." });
+      return;
+    }
     if (!CANTON_PACKAGE_ID) {
       setFaucetStatus({ error: "NEXT_PUBLIC_DAML_PACKAGE_ID is missing." });
       return;
@@ -1512,6 +1516,11 @@ export function AdminPage() {
 
           <div className="card">
             <h3 className="mb-3 font-semibold text-gray-300">Canton Faucet</h3>
+            {!CANTON_OPERATOR_PARTY && (
+              <div className="mb-3 rounded-lg border border-orange-700/40 bg-orange-900/20 p-3 text-sm text-orange-300">
+                Canton operator party not configured. Set NEXT_PUBLIC_CANTON_OPERATOR_PARTY or NEXT_PUBLIC_CANTON_PARTY to enable Canton faucet minting.
+              </div>
+            )}
             <div className="grid gap-3 sm:grid-cols-3">
               <div>
                 <label className="label">Canton USDC Amount</label>
@@ -1520,7 +1529,7 @@ export function AdminPage() {
                   className="mt-2 w-full"
                   onClick={() => mintCantonFaucetToken("CantonUSDC", cantonUsdcAmount)}
                   loading={faucetLoadingKey === "canton-CantonUSDC"}
-                  disabled={faucetLoadingKey !== null}
+                  disabled={faucetLoadingKey !== null || !CANTON_OPERATOR_PARTY}
                 >
                   Mint Canton USDC
                 </TxButton>
@@ -1532,7 +1541,7 @@ export function AdminPage() {
                   className="mt-2 w-full"
                   onClick={() => mintCantonFaucetToken("USDCx", cantonUsdcxAmount)}
                   loading={faucetLoadingKey === "canton-USDCx"}
-                  disabled={faucetLoadingKey !== null}
+                  disabled={faucetLoadingKey !== null || !CANTON_OPERATOR_PARTY}
                 >
                   Mint USDCx
                 </TxButton>
@@ -1544,7 +1553,7 @@ export function AdminPage() {
                   className="mt-2 w-full"
                   onClick={() => mintCantonFaucetToken("CantonCoin", cantonCoinAmount)}
                   loading={faucetLoadingKey === "canton-CantonCoin"}
-                  disabled={faucetLoadingKey !== null}
+                  disabled={faucetLoadingKey !== null || !CANTON_OPERATOR_PARTY}
                 >
                   Mint Canton Coin
                 </TxButton>

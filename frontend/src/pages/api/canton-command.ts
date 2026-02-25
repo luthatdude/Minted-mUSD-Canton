@@ -32,8 +32,7 @@ const PACKAGE_ID =
 function validateRequiredConfig(): string | null {
   if (!CANTON_PARTY || !CANTON_PARTY_PATTERN.test(CANTON_PARTY))
     return "CANTON_PARTY not configured";
-  if (!PACKAGE_ID || !PKG_ID_PATTERN.test(PACKAGE_ID))
-    return "CANTON_PACKAGE_ID/NEXT_PUBLIC_DAML_PACKAGE_ID not configured";
+  // PACKAGE_ID validated conditionally per-request: required only for short-name templates
   return null;
 }
 const ALLOW_OPERATOR_FALLBACK =
@@ -169,6 +168,11 @@ export default async function handler(
 
   if (!templateId) {
     return res.status(400).json({ error: "Missing templateId" });
+  }
+
+  // PACKAGE_ID required for short-name templates (no ':'), not for fully-qualified
+  if (!templateId.includes(":") && (!PACKAGE_ID || !PKG_ID_PATTERN.test(PACKAGE_ID))) {
+    return res.status(500).json({ success: false, error: "CANTON_PACKAGE_ID/NEXT_PUBLIC_DAML_PACKAGE_ID not configured" });
   }
 
   let resolvedTemplateId: string;
