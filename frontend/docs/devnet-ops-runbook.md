@@ -77,6 +77,29 @@ This exercises:
 1. CIP-56 → redeemable conversion (requires operator inventory)
 2. DirectMint_Redeem exercise (validates DAML service is operational)
 
+### 3. Force-Conversion Canary (Deterministic)
+
+When the canary party has surplus redeemable balance, `--require-conversion` fails because
+no conversion is needed. Use `--force-conversion-probe` to always test the real conversion path:
+
+```bash
+npm run ops:canary:force-conversion
+# equivalent to: npm run ops:canary -- --force-conversion-probe --execute
+```
+
+**How it works:**
+1. Queries balances and takes a CID snapshot of all existing tokens
+2. Forces a small (1.0 mUSD) CIP-56 → redeemable conversion regardless of existing redeemable balance
+3. After conversion, identifies newly-created CIDs by diffing against the snapshot
+4. Constrains redeem token selection to **only** CIDs from this conversion run
+5. Asserts `conversion_path_executed`: PASS only if conversion succeeded AND redeem consumed a newly-converted CID
+
+**Preconditions:**
+- Canary party must hold ≥ 1.0 CIP-56 balance
+- Operator inventory must be ≥ 1.0 mUSD
+
+**When to use:** Daily monitoring, CI/CD gates, or any time `--require-conversion` fails due to pre-existing redeemable balance.
+
 ## Recovery Flows
 
 ### Topup: Operator Inventory Below Floor
@@ -196,6 +219,7 @@ npm run ops:topup -- --target 2000 --chunk 250 --execute --mode protocol
 | `npm run ops:health` | Check operator inventory health | Read-only query |
 | `npm run ops:topup -- [flags]` | Top up operator inventory | Dry-run (requires `--execute`) |
 | `npm run ops:canary -- [flags]` | E2E bridge path validation | Dry-run (requires `--execute`) |
+| `npm run ops:canary:force-conversion` | Deterministic conversion + redeem probe | Always executes (force mode) |
 | `npm run typecheck:scripts` | Type-check ops scripts | Read-only |
 
 ## Failure Signature Quick Map
