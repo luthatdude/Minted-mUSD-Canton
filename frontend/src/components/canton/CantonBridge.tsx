@@ -3,7 +3,7 @@ import { ethers } from "ethers";
 import { BLE_BRIDGE_V9_ABI } from "@/abis/BLEBridgeV9";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
-import { useCantonLedger, cantonExercise, fetchFreshBalances } from "@/hooks/useCantonLedger";
+import { useCantonLedger, cantonExercise, fetchFreshBalances, convertCip56ToRedeemable, fetchBridgePreflight, type BridgePreflightData } from "@/hooks/useCantonLedger";
 import { useLoopWallet } from "@/hooks/useLoopWallet";
 import { CONTRACTS } from "@/lib/config";
 import { formatTimestamp, formatUSD } from "@/lib/format";
@@ -32,6 +32,7 @@ export function CantonBridge() {
   const [amount, setAmount] = useState("");
   const [txStatus, setTxStatus] = useState<TxStatus>("idle");
   const [txError, setTxError] = useState<string | null>(null);
+  const [preflight, setPreflight] = useState<BridgePreflightData | null>(null);
   const [ethBridge, setEthBridge] = useState<EthereumBridgeData>({
     attestedAssets: 0n,
     supplyCap: 0n,
@@ -41,6 +42,28 @@ export function CantonBridge() {
   });
 
   const totalMusd = hasConnectedUserParty && data ? parseFloat(data.totalBalance) : 0;
+  const redeemableMusd = preflight ? parseFloat(preflight.userRedeemableBalance) : totalMusd;
+  const cip56Musd = preflight ? parseFloat(preflight.userCip56Balance) : 0;
+
+  // Preflight: fetch operator inventory + max bridgeable
+  const loadPreflight = useCallback(async () => {
+    if (!activeParty) return;
+    try {
+      const pf = await fetchBridgePreflight(activeParty);
+      setPreflight(pf);
+    } catch (err) {
+      console.warn("[CantonBridge] Preflight fetch failed:", err);
+    }
+  }, [activeParty]);
+
+  useEffect(() => {
+    void loadPreflight();
+  }, [loadPreflight]);
+
+  // Derived preflight values
+  const maxBridgeable = preflight ? parseFloat(preflight.maxBridgeable) : totalMusd;
+  const operatorInventory = preflight ? parseFloat(preflight.operatorInventory) : Infinity;
+  const preflightBlockers = preflight?.blockers ?? [];
 
   const loadEthereumBridgeData = useCallback(async () => {
     if (!CONTRACTS.BLEBridgeV9 || !ethers.isAddress(CONTRACTS.BLEBridgeV9)) {
@@ -89,8 +112,10 @@ export function CantonBridge() {
     return Number.isFinite(n) && n > 0 ? n : 0;
   })();
 
-  const hasEnoughBalance = parsedAmount > 0 && parsedAmount <= totalMusd;
-  const canRedeem = hasConnectedUserParty && parsedAmount > 0 && hasEnoughBalance && txStatus === "idle";
+  const hasEnoughRedeemable = parsedAmount > 0 && parsedAmount <= redeemableMusd;
+  const needsConversion = parsedAmount > 0 && !hasEnoughRedeemable && parsedAmount <= totalMusd;
+  const exceedsMaxBridgeable = parsedAmount > 0 && parsedAmount > maxBridgeable + 0.000001;
+  const canRedeem = hasConnectedUserParty && parsedAmount > 0 && !exceedsMaxBridgeable && (hasEnoughRedeemable || needsConversion) && txStatus === "idle";
   const timeSinceAttestation = ethBridge.lastAttestation > 0n
     ? Math.round((Date.now() / 1000) - Number(ethBridge.lastAttestation))
     : 0;
@@ -105,7 +130,7 @@ export function CantonBridge() {
 
   async function handleRefresh() {
     refresh();
-    await loadEthereumBridgeData();
+    await Promise.all([loadEthereumBridgeData(), loadPreflight()]);
   }
 
   async function handleRedeem() {
@@ -121,8 +146,8 @@ export function CantonBridge() {
       return;
     }
 
-    if (!hasEnoughBalance) {
-      setTxError("Insufficient CantonMUSD balance");
+    if (!hasEnoughRedeemable && !needsConversion) {
+      setTxError("Insufficient mUSD balance");
       setTxStatus("error");
       return;
     }
@@ -131,6 +156,22 @@ export function CantonBridge() {
     setTxError(null);
 
     try {
+      // Auto-convert CIP-56 → redeemable if user doesn't have enough legacy tokens
+      if (needsConversion) {
+        const convertNeeded = parsedAmount - redeemableMusd;
+        const convResult = await convertCip56ToRedeemable(activeParty, convertNeeded);
+        if (!convResult.success) {
+          const rawErr = convResult.error || "";
+          if (rawErr.includes("Insufficient operator inventory") || rawErr.includes("inventoryAvailable")) {
+            const match = rawErr.match(/have ([\d.]+) redeemable, need ([\d.]+)/);
+            const available = match ? match[1] : "0";
+            const needed = match ? match[2] : convertNeeded.toFixed(2);
+            throw new Error(`Conversion inventory low: only ${available} redeemable mUSD available, need ${needed}. Try a smaller amount or wait for inventory replenishment.`);
+          }
+          throw new Error(`Auto-conversion failed: ${rawErr}`);
+        }
+      }
+
       const fresh = await fetchFreshBalances(activeParty);
       const freshTokens = fresh.tokens || [];
       const operatorSnapshot = await fetchFreshBalances(null);
@@ -141,13 +182,71 @@ export function CantonBridge() {
       }
 
       if (!directMintService) {
-        throw new Error("DirectMintService not available \u2014 cannot redeem");
+        setTxError("DirectMint service is not initialized on the Canton ledger. Contact the protocol operator to deploy CantonDirectMintService.");
+        setTxStatus("error");
+        return;
       }
 
       let selectedToken = freshTokens.find((t: any) => parseFloat(t.amount) >= parsedAmount);
+
+      // Auto-consolidate fragmented redeemable tokens via CantonMUSD_Merge.
+      // If no single token covers the amount but aggregate does, repeatedly
+      // merge the two largest until one token is big enough (max 10 rounds).
       if (!selectedToken) {
-        const largest = Math.max(...freshTokens.map((t: any) => parseFloat(t.amount)));
-        throw new Error(`No single token has ${amount} mUSD. Largest token has ${largest} mUSD.`);
+        const totalRedeemable = freshTokens.reduce((s: number, t: any) => s + parseFloat(t.amount), 0);
+        if (totalRedeemable < parsedAmount - 0.000001) {
+          throw new Error(`Insufficient redeemable mUSD: have ${totalRedeemable.toFixed(2)}, need ${parsedAmount.toFixed(2)}`);
+        }
+
+        const MAX_MERGE_ROUNDS = 10;
+        let mergeTokens = [...freshTokens];
+
+        for (let round = 0; round < MAX_MERGE_ROUNDS; round++) {
+          mergeTokens.sort((a: any, b: any) => parseFloat(b.amount) - parseFloat(a.amount));
+
+          if (parseFloat(mergeTokens[0].amount) >= parsedAmount - 0.000001) {
+            selectedToken = mergeTokens[0];
+            break;
+          }
+
+          if (mergeTokens.length < 2) break;
+
+          const primary = mergeTokens[0];
+          const secondary = mergeTokens[1];
+
+          const mergeResp = await cantonExercise(
+            "CantonMUSD",
+            primary.contractId,
+            "CantonMUSD_Merge",
+            { otherCid: secondary.contractId },
+            activeParty
+          );
+
+          if (!mergeResp.success) {
+            console.warn(`[CantonBridge] Merge round ${round + 1} failed:`, mergeResp.error);
+            break;
+          }
+
+          const refreshed = await fetchFreshBalances(activeParty);
+          mergeTokens = refreshed.tokens || [];
+
+          if (mergeTokens.length === 0) break;
+        }
+
+        if (!selectedToken) {
+          selectedToken = mergeTokens
+            .sort((a: any, b: any) => parseFloat(b.amount) - parseFloat(a.amount))
+            .find((t: any) => parseFloat(t.amount) >= parsedAmount - 0.000001);
+        }
+
+        if (!selectedToken) {
+          const largest = mergeTokens.length > 0
+            ? Math.max(...mergeTokens.map((t: any) => parseFloat(t.amount)))
+            : 0;
+          throw new Error(
+            `Auto-consolidation could not produce a token covering ${parsedAmount.toFixed(2)} mUSD after ${MAX_MERGE_ROUNDS} merge rounds. Largest: ${largest.toFixed(2)} mUSD.`
+          );
+        }
       }
 
       let cidToRedeem = selectedToken.contractId;
@@ -214,7 +313,7 @@ export function CantonBridge() {
       <div className="flex min-h-[400px] items-center justify-center">
         <div className="text-center">
           <div className="mx-auto mb-4 h-12 w-12 animate-spin rounded-full border-4 border-purple-500/20 border-t-purple-500" />
-          <p className="text-gray-400">Loading Canton bridge data\u2026</p>
+          <p className="text-gray-400">Loading Canton bridge data&hellip;</p>
         </div>
       </div>
     );
@@ -317,7 +416,7 @@ export function CantonBridge() {
           </div>
           <div>
             <h2 className="text-lg font-semibold text-white">Bridge to Ethereum</h2>
-            <p className="text-sm text-gray-400">Burn mUSD on Canton \u2192 Mint on Ethereum</p>
+            <p className="text-sm text-gray-400">Burn mUSD on Canton &rarr; Mint on Ethereum</p>
           </div>
         </div>
 
@@ -347,15 +446,78 @@ export function CantonBridge() {
           )}
         </div>
 
+        {hasConnectedUserParty && totalMusd > 0 && (
+          <div className="mb-4 rounded-xl bg-surface-800/50 border border-white/5 p-4 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-gray-400">Total mUSD Balance</span>
+              <span className="text-sm font-semibold text-white">{totalMusd.toLocaleString(undefined, { maximumFractionDigits: 2 })} mUSD</span>
+            </div>
+            {preflight && redeemableMusd > 0 && (
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-gray-500">Redeemable (CantonMUSD)</span>
+                <span className="text-xs font-medium text-emerald-400">
+                  {redeemableMusd.toLocaleString(undefined, { maximumFractionDigits: 2 })} mUSD
+                </span>
+              </div>
+            )}
+            {preflight && cip56Musd > 0 && (
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-gray-500">CIP-56 (auto-convertible)</span>
+                <span className="text-xs font-medium text-blue-400">
+                  {cip56Musd.toLocaleString(undefined, { maximumFractionDigits: 2 })} mUSD
+                </span>
+              </div>
+            )}
+            {preflight && (
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-gray-500">Max bridgeable now</span>
+                <span className={`text-xs font-semibold ${maxBridgeable > 0 ? "text-emerald-400" : "text-red-400"}`}>
+                  {maxBridgeable.toLocaleString(undefined, { maximumFractionDigits: 2 })} mUSD
+                </span>
+              </div>
+            )}
+            {preflight && operatorInventory < Infinity && cip56Musd > 0 && (
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-gray-500">Operator conversion inventory</span>
+                <span className={`text-xs font-medium ${operatorInventory > 0 ? "text-yellow-400" : "text-red-400"}`}>
+                  {operatorInventory.toLocaleString(undefined, { maximumFractionDigits: 2 })} mUSD
+                </span>
+              </div>
+            )}
+            {cip56Musd > 0 && (
+              <div className="mt-2 rounded-lg bg-blue-500/10 border border-blue-500/20 px-3 py-2">
+                <p className="text-xs text-blue-300">
+                  CIP-56 is your primary mUSD balance. Redeem currently requires legacy CantonMUSD and auto-converts from CIP-56 when needed.
+                </p>
+              </div>
+            )}
+            {preflightBlockers.includes("NO_OPERATOR_INVENTORY") && (
+              <div className="mt-2 rounded-lg bg-red-500/10 border border-red-500/20 px-3 py-2">
+                <p className="text-xs text-red-300">
+                  Operator conversion inventory is empty. Only existing redeemable CantonMUSD can be bridged. CIP-56 tokens cannot be converted until inventory is replenished.
+                </p>
+              </div>
+            )}
+            {preflightBlockers.includes("LOW_OPERATOR_INVENTORY") && !preflightBlockers.includes("NO_OPERATOR_INVENTORY") && (
+              <div className="mt-2 rounded-lg bg-yellow-500/10 border border-yellow-500/20 px-3 py-2">
+                <p className="text-xs text-yellow-300">
+                  Operator conversion inventory ({operatorInventory.toFixed(2)} mUSD) is lower than your CIP-56 balance. Max bridgeable is capped at {maxBridgeable.toFixed(2)} mUSD.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="space-y-4">
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <label className="text-sm font-medium text-gray-300">Amount (mUSD)</label>
               <button
-                onClick={() => setAmount(totalMusd.toFixed(6))}
-                className="text-xs text-brand-400 hover:text-brand-300 transition-colors"
+                onClick={() => setAmount(Math.min(totalMusd, maxBridgeable).toFixed(6))}
+                disabled={totalMusd === 0}
+                className="text-xs text-brand-400 hover:text-brand-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Max: {totalMusd.toLocaleString(undefined, { maximumFractionDigits: 2 })} mUSD
+                Max: {Math.min(totalMusd, maxBridgeable).toLocaleString(undefined, { maximumFractionDigits: 2 })} mUSD
               </button>
             </div>
             <div className="relative">
@@ -375,8 +537,16 @@ export function CantonBridge() {
               <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-medium text-gray-500">mUSD</span>
             </div>
 
-            {parsedAmount > 0 && !hasEnoughBalance && (
+            {parsedAmount > 0 && parsedAmount > totalMusd && (
               <p className="mt-1 text-xs text-red-400">Insufficient mUSD balance</p>
+            )}
+            {exceedsMaxBridgeable && parsedAmount <= totalMusd && (
+              <p className="mt-1 text-xs text-red-400">
+                Exceeds max bridgeable ({maxBridgeable.toFixed(2)} mUSD). Operator conversion inventory limits how much CIP-56 can be converted.
+              </p>
+            )}
+            {needsConversion && !exceedsMaxBridgeable && (
+              <p className="mt-1 text-xs text-blue-400">CIP-56 tokens will be auto-converted to redeemable CantonMUSD</p>
             )}
           </div>
 
@@ -403,14 +573,18 @@ export function CantonBridge() {
               {txStatus === "bridging" ? (
                 <span className="flex items-center justify-center gap-2">
                   <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                  Submitting\u2026
+                  Submitting&hellip;
                 </span>
               ) : !hasConnectedUserParty ? (
                 "Connect Loop Wallet First"
               ) : parsedAmount <= 0 ? (
                 "Enter Amount"
-              ) : !hasEnoughBalance ? (
+              ) : parsedAmount > totalMusd ? (
                 "Insufficient Balance"
+              ) : exceedsMaxBridgeable ? (
+                `Exceeds Max Bridgeable (${maxBridgeable.toFixed(2)})`
+              ) : needsConversion ? (
+                `Convert & Bridge ${amount} mUSD to Ethereum`
               ) : (
                 `Bridge ${amount} mUSD to Ethereum`
               )}
@@ -463,7 +637,7 @@ export function CantonBridge() {
               <li>Your CantonMUSD is consumed by DirectMint_Redeem on Canton</li>
               <li>A RedemptionRequest is created on the Canton ledger</li>
               <li>The relay detects the request and mints mUSD on Ethereum</li>
-              <li>Typical completion time: 10\u201390 seconds</li>
+              <li>Typical completion time: 10&ndash;90 seconds</li>
             </ol>
           </div>
         </div>

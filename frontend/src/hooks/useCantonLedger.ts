@@ -237,6 +237,66 @@ export async function refreshPriceFeeds(): Promise<{ success: boolean; refreshed
 }
 
 /**
+ * Preflight check for bridge-out: returns max bridgeable amount
+ * and deterministic blocker reasons.
+ */
+export interface BridgePreflightData {
+  party: string;
+  userCip56Balance: string;
+  userRedeemableBalance: string;
+  userTotal: string;
+  operatorInventory: string;
+  convertibleCip56: string;
+  maxBridgeable: string;
+  blockers: string[];
+  ledgerOffset: number;
+  timestamp: string;
+}
+
+export async function fetchBridgePreflight(party: string): Promise<BridgePreflightData> {
+  const normalized = normalizeCantonParty(party);
+  if (!normalized) throw new Error("Invalid party for preflight");
+  const resp = await fetch(`/api/canton-bridge-preflight?party=${encodeURIComponent(normalized)}`, {
+    cache: "no-store",
+  });
+  const contentType = resp.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    const text = await resp.text().catch(() => "Unknown error");
+    throw new Error(`HTTP ${resp.status}: ${text.slice(0, 300)}`);
+  }
+  const result = await resp.json();
+  if (!resp.ok || result.error) {
+    throw new Error(result.error || `HTTP ${resp.status}`);
+  }
+  return result;
+}
+
+/**
+ * Convert CIP-56 mUSD → redeemable CantonMUSD via server-side inventory swap.
+ * Returns the conversion result or throws on failure.
+ */
+export async function convertCip56ToRedeemable(
+  party: string,
+  amount: number
+): Promise<{ success: boolean; convertedAmount: string; commandId: string; error?: string }> {
+  const resp = await fetch("/api/canton-convert", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ party, amount: amount.toFixed(10) }),
+  });
+  const contentType = resp.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    const text = await resp.text().catch(() => "Unknown error");
+    return { success: false, convertedAmount: "0", commandId: "", error: `HTTP ${resp.status}: ${text.slice(0, 300)}` };
+  }
+  const result = await resp.json();
+  if (!resp.ok || result.error) {
+    return { success: false, convertedAmount: "0", commandId: "", error: result.error || `HTTP ${resp.status}` };
+  }
+  return result;
+}
+
+/**
  * Create a DAML contract on Canton via server-side API route.
  */
 export async function cantonCreate(
