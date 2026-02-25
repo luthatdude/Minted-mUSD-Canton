@@ -486,13 +486,10 @@ template CantonDirectMintService
     authorizedMinters : [Party]  -- Users authorized to mint (visibility required)
     -- Canton coin oracle price for CantonCoin → mUSD conversion
     cantonCoinPrice : Optional Money  -- USD per Canton coin (None = CantonCoin minting disabled)
-    serviceName : Text           -- D-M02: Unique service name for lookupByKey
+    serviceName : Text           -- service identifier for ACS query
   where
     signatory operator
     observer usdcIssuer, authorizedMinters
-
-    key (operator, serviceName) : (Party, Text)
-    maintainer key._1
 
     -- | Mint: User deposits USDC on Canton → gets Canton mUSD
     -- → BridgeOutRequest emitted to pipe USDC to Ethereum Treasury
@@ -791,6 +788,114 @@ template CantonDirectMintService
 
         return (newService, redemptionCid)
 
+    -- | RedeemFromInventory: CIP-56-native redeem path.
+    -- Uses operator's own CantonMUSD inventory to create a RedemptionRequest
+    -- for the user, without requiring an intermediate user-owned CantonMUSD.
+    -- The CIP-56 token archive happens at the API layer (separate package).
+    --
+    -- Flow:
+    --   1. API archives user's CIP-56 tokens (CIP-56 package)
+    --   2. API creates CIP-56 escrow under operator (CIP-56 package)
+    --   3. This choice consumes operator inventory and creates RedemptionRequest
+    --   All submitted as a single atomic batch command.
+    --
+    -- Economic invariants match DirectMint_Redeem:
+    --   - Same fee structure (redeemFeeBps)
+    --   - Same compliance validation (ValidateRedemption)
+    --   - Same rate limit tracking
+    --   - Same audit receipt
+    nonconsuming choice DirectMint_RedeemFromInventory
+      : (ContractId CantonDirectMintService, ContractId RedemptionRequest)
+      with
+        user : Party
+        inventoryMusdCids : [ContractId CantonMUSD]  -- Operator-owned inventory tokens
+        redeemAmount : Money                          -- Exact amount to redeem
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+        assertMsg "BELOW_MIN_AMOUNT" (redeemAmount >= minAmount)
+        assertMsg "ABOVE_MAX_AMOUNT" (redeemAmount <= maxAmount)
+        assertMsg "NO_INVENTORY_SOURCES" (not (null inventoryMusdCids))
+
+        -- Compliance check: verify redeemer is not blacklisted or frozen
+        exercise complianceRegistryCid ValidateRedemption with redeemer = user
+
+        -- Validate all inventory mUSD are operator-owned and sum sufficient
+        let validateInv cid = do
+              m <- fetch cid
+              assertMsg "INV_NOT_OPERATOR_OWNED" (m.owner == operator && m.issuer == operator)
+              return m.amount
+        amounts <- mapA validateInv inventoryMusdCids
+        let totalInventory = foldl (+) 0.0 amounts
+        assertMsg "INSUFFICIENT_INVENTORY" (totalInventory >= redeemAmount)
+
+        -- Archive all inventory sources
+        _ <- mapA archive inventoryMusdCids
+
+        -- Return change to operator if inventory exceeds redeem amount
+        let change = totalInventory - redeemAmount
+        if change > 0.0
+          then do
+            userObs <- lookupUserObservers operator operator None
+            _ <- create CantonMUSD with
+              issuer = operator
+              owner = operator
+              amount = change
+              agreementHash = mpaHash
+              agreementUri = mpaUri
+              privacyObservers = userObs
+            pure ()
+          else pure ()
+
+        -- Calculate fees (same as DirectMint_Redeem)
+        let feeAmount = redeemAmount * intToNumeric redeemFeeBps / 10000.0
+        let netAmount = redeemAmount - feeAmount
+
+        -- Create redemption request for the user
+        now <- getTime
+        redemptionCid <- create RedemptionRequest with
+          operator = operator
+          user = user
+          musdBurned = redeemAmount
+          usdcOwed = netAmount
+          feeAmount = feeAmount
+          createdAt = now
+          fulfilled = False
+
+        -- Track burn in rate limit window (burns offset mints)
+        let windowElapsed = subTime now lastRateLimitReset
+        let oneDayRel = hours 24
+        let (resetMinted, resetBurned, resetTime) =
+              if windowElapsed >= oneDayRel
+              then (0.0, 0.0, now)
+              else (dailyMinted, dailyBurned, lastRateLimitReset)
+
+        -- Note: currentSupply is NOT decremented here because operator inventory
+        -- was created directly (not via DirectMint_Mint), so it was never counted
+        -- in currentSupply. The inventory represents a conversion pool, not minted supply.
+        newService <- create this with
+          accumulatedFees = accumulatedFees + feeAmount
+          dailyMinted = resetMinted
+          dailyBurned = resetBurned + redeemAmount
+          lastRateLimitReset = resetTime
+
+        -- Audit receipt
+        registry <- fetch complianceRegistryCid
+        create BurnAuditReceipt with
+          operator = operator
+          regulator = registry.regulator
+          burner = user
+          amount = redeemAmount
+          feeAmount = feeAmount
+          netRedeemed = netAmount
+          supplyAfter = currentSupply  -- unchanged; inventory wasn't in tracked supply
+          bridgeNonce = 0
+          timestamp = now
+          txHash = ""
+          action = Redeem
+
+        return (newService, redemptionCid)
+
     -- Admin controls
     -- HIGH-02: Supply cap increase cooldown — prevents chaining 20% increases
     -- C-DAML-03: Governance proof required for supply cap changes
@@ -910,9 +1015,6 @@ template RedemptionEthereumSettlement
   where
     signatory operator
     observer user
-
-    key (operator, ethTxHash) : (Party, Text)
-    maintainer key._1
 
     ensure amountPaid > 0.0
       && DA.Text.length recipientEth > 0

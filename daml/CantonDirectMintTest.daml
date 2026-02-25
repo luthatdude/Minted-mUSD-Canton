@@ -830,3 +830,252 @@ test_FullLifecycle = script do
   submit operator do
     exerciseCmd redemptionCid Redemption_Fulfill with usdcCid = fulfillUsdc; complianceRegistryCid = complianceCid
   pure ()
+
+-- ============================================================
+--         TEST 17: REDEEM FROM INVENTORY — HAPPY PATH
+-- ============================================================
+
+test_RedeemFromInventory : Script ()
+test_RedeemFromInventory = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  regulator <- allocateParty "Regulator"
+  complianceCid <- createCompliance regulator operator
+  mintSvc <- createMintService operator operator complianceCid [alice]
+
+  -- Create operator-owned inventory (not tracked in currentSupply)
+  inv1 <- createMUSD operator operator 500.0
+  inv2 <- createMUSD operator operator 600.0
+
+  -- Alice redeems 800 mUSD from operator inventory
+  (svc2, redemptionCid) <- submitMulti [alice] [operator] do
+    exerciseCmd mintSvc DirectMint_RedeemFromInventory with
+      user = alice
+      inventoryMusdCids = [inv1, inv2]
+      redeemAmount = 800.0
+
+  -- Verify RedemptionRequest
+  r <- queryContractId alice redemptionCid
+  case r of
+    Some req -> do
+      assertMsg "user" (req.user == alice)
+      assertMsg "burned amount" (req.musdBurned == 800.0)
+      -- Fee: 800 * 30/10000 = 2.4, net = 797.6
+      assertMsg "usdc owed" (req.usdcOwed == 797.6)
+      assertMsg "fee" (req.feeAmount == 2.4)
+      assertMsg "not fulfilled" (not req.fulfilled)
+    None -> abort "RedemptionRequest not found"
+
+  -- Verify change returned to operator (1100 - 800 = 300)
+  operatorMusd <- query @CantonMUSD operator
+  let changeContracts = filter (\(_, m) -> m.owner == operator && m.amount == 300.0) operatorMusd
+  assertMsg "change returned" (length changeContracts == 1)
+
+  -- Verify original inventory is archived
+  inv1Check <- queryContractId operator inv1
+  inv2Check <- queryContractId operator inv2
+  assertMsg "inv1 archived" (inv1Check == None)
+  assertMsg "inv2 archived" (inv2Check == None)
+
+  -- SUPPLY INVARIANT: currentSupply must be unchanged (inventory was never tracked)
+  svc2Data <- queryContractId operator svc2
+  case svc2Data of
+    Some svc -> assertMsg "currentSupply unchanged" (svc.currentSupply == 0.0)
+    None -> abort "New service contract not found"
+  pure ()
+
+-- ============================================================
+--         TEST 18: REDEEM FROM INVENTORY — EXACT AMOUNT (NO CHANGE)
+-- ============================================================
+
+test_RedeemFromInventoryExact : Script ()
+test_RedeemFromInventoryExact = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  regulator <- allocateParty "Regulator"
+  complianceCid <- createCompliance regulator operator
+  mintSvc <- createMintService operator operator complianceCid [alice]
+
+  inv1 <- createMUSD operator operator 500.0
+
+  -- Redeem exactly 500 — no change should be created
+  (_, redemptionCid) <- submitMulti [alice] [operator] do
+    exerciseCmd mintSvc DirectMint_RedeemFromInventory with
+      user = alice
+      inventoryMusdCids = [inv1]
+      redeemAmount = 500.0
+
+  r <- queryContractId alice redemptionCid
+  case r of
+    Some req -> assertMsg "burned amount" (req.musdBurned == 500.0)
+    None -> abort "RedemptionRequest not found"
+
+  -- No change contract should exist (operator had 500, redeemed 500)
+  operatorMusd <- query @CantonMUSD operator
+  let operatorOwned = filter (\(_, m) -> m.owner == operator) operatorMusd
+  assertMsg "no change created" (null operatorOwned)
+  pure ()
+
+-- ============================================================
+--         TEST 19: REDEEM FROM INVENTORY — INSUFFICIENT INVENTORY
+-- ============================================================
+
+test_RedeemFromInventoryInsufficient : Script ()
+test_RedeemFromInventoryInsufficient = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  regulator <- allocateParty "Regulator"
+  complianceCid <- createCompliance regulator operator
+  mintSvc <- createMintService operator operator complianceCid [alice]
+
+  inv1 <- createMUSD operator operator 100.0
+
+  -- Try to redeem 500 from only 100 inventory — must fail
+  submitMultiMustFail [alice] [operator] do
+    exerciseCmd mintSvc DirectMint_RedeemFromInventory with
+      user = alice
+      inventoryMusdCids = [inv1]
+      redeemAmount = 500.0
+  pure ()
+
+-- ============================================================
+--         TEST 20: REDEEM FROM INVENTORY — WRONG OWNER (NOT OPERATOR)
+-- ============================================================
+
+test_RedeemFromInventoryWrongOwner : Script ()
+test_RedeemFromInventoryWrongOwner = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  regulator <- allocateParty "Regulator"
+  complianceCid <- createCompliance regulator operator
+  mintSvc <- createMintService operator operator complianceCid [alice]
+
+  -- Create mUSD owned by Alice (not operator inventory)
+  aliceMusd <- createMUSD operator alice 500.0
+
+  -- Must fail: inventory tokens must be operator-owned
+  submitMultiMustFail [alice] [operator] do
+    exerciseCmd mintSvc DirectMint_RedeemFromInventory with
+      user = alice
+      inventoryMusdCids = [aliceMusd]
+      redeemAmount = 500.0
+  pure ()
+
+-- ============================================================
+--         TEST 21: REDEEM FROM INVENTORY — PAUSED SERVICE
+-- ============================================================
+
+test_RedeemFromInventoryPaused : Script ()
+test_RedeemFromInventoryPaused = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  regulator <- allocateParty "Regulator"
+  complianceCid <- createCompliance regulator operator
+  mintSvc <- createMintService operator operator complianceCid [alice]
+
+  pausedSvc <- submit operator do
+    exerciseCmd mintSvc DirectMint_SetPaused with newPaused = True
+
+  inv1 <- createMUSD operator operator 500.0
+
+  -- Must fail: service is paused
+  submitMultiMustFail [alice] [operator] do
+    exerciseCmd pausedSvc DirectMint_RedeemFromInventory with
+      user = alice
+      inventoryMusdCids = [inv1]
+      redeemAmount = 500.0
+  pure ()
+
+-- ============================================================
+--         TEST 22: REDEEM FROM INVENTORY — BELOW MIN AMOUNT
+-- ============================================================
+
+test_RedeemFromInventoryBelowMin : Script ()
+test_RedeemFromInventoryBelowMin = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  regulator <- allocateParty "Regulator"
+  complianceCid <- createCompliance regulator operator
+  mintSvc <- createMintService operator operator complianceCid [alice]
+
+  inv1 <- createMUSD operator operator 0.5
+
+  -- Must fail: redeemAmount 0.5 < minAmount 1.0
+  submitMultiMustFail [alice] [operator] do
+    exerciseCmd mintSvc DirectMint_RedeemFromInventory with
+      user = alice
+      inventoryMusdCids = [inv1]
+      redeemAmount = 0.5
+  pure ()
+
+-- ============================================================
+--         TEST 23: REDEEM FROM INVENTORY — EMPTY LIST
+-- ============================================================
+
+test_RedeemFromInventoryEmptyList : Script ()
+test_RedeemFromInventoryEmptyList = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  regulator <- allocateParty "Regulator"
+  complianceCid <- createCompliance regulator operator
+  mintSvc <- createMintService operator operator complianceCid [alice]
+
+  -- Must fail: empty inventory list
+  submitMultiMustFail [alice] [operator] do
+    exerciseCmd mintSvc DirectMint_RedeemFromInventory with
+      user = alice
+      inventoryMusdCids = []
+      redeemAmount = 100.0
+  pure ()
+
+-- ============================================================
+--         TEST 24: REDEEM FROM INVENTORY — BLACKLISTED USER
+-- ============================================================
+
+test_RedeemFromInventoryBlacklisted : Script ()
+test_RedeemFromInventoryBlacklisted = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  regulator <- allocateParty "Regulator"
+  now <- getTime
+
+  complianceCid <- submit regulator do
+    createCmd ComplianceRegistry with
+      regulator; operator
+      blacklisted = Set.fromList [alice]
+      frozen = Set.empty; lastUpdated = now
+
+  mintSvc <- createMintService operator operator complianceCid [alice]
+  inv1 <- createMUSD operator operator 500.0
+
+  -- Must fail: alice is blacklisted
+  submitMultiMustFail [alice] [operator] do
+    exerciseCmd mintSvc DirectMint_RedeemFromInventory with
+      user = alice
+      inventoryMusdCids = [inv1]
+      redeemAmount = 500.0
+  pure ()
+
+-- ============================================================
+--         TEST 25: REDEEM FROM INVENTORY — MIXED OWNER LIST
+-- ============================================================
+
+test_RedeemFromInventoryMixedOwner : Script ()
+test_RedeemFromInventoryMixedOwner = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  regulator <- allocateParty "Regulator"
+  complianceCid <- createCompliance regulator operator
+  mintSvc <- createMintService operator operator complianceCid [alice]
+
+  -- Create one operator-owned and one alice-owned mUSD
+  operatorInv <- createMUSD operator operator 500.0
+  aliceMusd <- createMUSD operator alice 500.0
+
+  -- Must fail: mixed list contains non-operator-owned token
+  submitMultiMustFail [alice] [operator] do
+    exerciseCmd mintSvc DirectMint_RedeemFromInventory with
+      user = alice
+      inventoryMusdCids = [operatorInv, aliceMusd]
+      redeemAmount = 800.0
+  pure ()

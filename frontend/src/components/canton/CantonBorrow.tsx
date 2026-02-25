@@ -9,6 +9,8 @@ import {
   cantonExercise,
   fetchFreshBalances,
   refreshPriceFeeds,
+  convertCip56ToRedeemable,
+  fetchBridgePreflight,
   type CantonBalancesData,
   type EscrowInfo,
   type SimpleToken,
@@ -395,13 +397,33 @@ export function CantonBorrow() {
           throw new Error("Selected debt is already settled.");
         }
 
-        const selectedMusd = pickContractForAmount(fresh.tokens || [], targetRepayAmount);
+        // Auto-convert CIP-56 → CantonMUSD if needed for repayment
+        let repayTokens = fresh.tokens || [];
+        const redeemableTotal = repayTokens.reduce((s, t) => s + parseFloat(t.amount || "0"), 0);
+        if (redeemableTotal < targetRepayAmount - 0.000001) {
+          try {
+            const pf = await fetchBridgePreflight(activeParty);
+            const cip56Available = parseFloat(pf.userCip56Balance);
+            if (cip56Available > 0) {
+              const convertNeeded = Math.min(targetRepayAmount - redeemableTotal, cip56Available);
+              const convResult = await convertCip56ToRedeemable(activeParty, convertNeeded);
+              if (convResult.success) {
+                const refreshed = await fetchFreshBalances(activeParty);
+                repayTokens = refreshed.tokens || [];
+              }
+            }
+          } catch (convErr) {
+            console.warn("[CantonBorrow] CIP-56 auto-conversion for repay failed:", convErr);
+          }
+        }
+
+        const selectedMusd = pickContractForAmount(repayTokens, targetRepayAmount);
         if (!selectedMusd) {
-          const maxAvailable = (fresh.tokens || []).reduce((max, token) => Math.max(max, parseFloat(token.amount || "0")), 0);
+          const maxAvailable = repayTokens.reduce((max, token) => Math.max(max, parseFloat(token.amount || "0")), 0);
           throw new Error(
             maxAvailable > 0
               ? `No mUSD contract large enough. Largest available is ${fmtAmount(maxAvailable)} mUSD.`
-              : "No mUSD token available for repayment."
+              : "No mUSD token available for repayment. If you have CIP-56 mUSD, ensure operator inventory is available for conversion."
           );
         }
 
