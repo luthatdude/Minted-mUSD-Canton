@@ -22,6 +22,7 @@
 module CantonDirectMintTest where
 
 import CantonDirectMint
+import CantonSMUSD (CantonSMUSD(..), CantonStakingService(..), StakeFromInventory(..))
 import Compliance (ComplianceRegistry(..), ValidateMint(..))
 import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
 import DA.Set qualified as Set
@@ -1078,4 +1079,290 @@ test_RedeemFromInventoryMixedOwner = script do
       user = alice
       inventoryMusdCids = [operatorInv, aliceMusd]
       redeemAmount = 800.0
+  pure ()
+
+-- ============================================================
+--         STAKE FROM INVENTORY TESTS
+-- ============================================================
+
+-- Helper: create a CantonStakingService for tests
+createStakingService : Party -> ContractId ComplianceRegistry -> [Party] -> Script (ContractId CantonStakingService)
+createStakingService operator complianceCid observers =
+  submit operator do
+    createCmd CantonStakingService with
+      operator
+      governance = operator
+      totalShares = 0.0
+      pooledMusd = 0.0
+      poolMusdCid = None
+      globalSharePrice = 1.0
+      globalTotalAssets = 0.0
+      globalTotalShares = 0.0
+      lastSyncEpoch = 0
+      cooldownSeconds = 0
+      minDeposit = 1.0
+      paused = False
+      complianceRegistryCid = complianceCid
+      mpaHash = testMpaHash
+      mpaUri = testMpaUri
+      observers
+
+-- ============================================================
+--         TEST 26: STAKE FROM INVENTORY — HAPPY PATH
+-- ============================================================
+
+test_StakeFromInventoryHappyPath : Script ()
+test_StakeFromInventoryHappyPath = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  regulator <- allocateParty "Regulator"
+  complianceCid <- createCompliance regulator operator
+  stakingSvc <- createStakingService operator complianceCid [alice]
+
+  -- Create operator inventory
+  inv1 <- createMUSD operator operator 500.0
+  inv2 <- createMUSD operator operator 600.0
+
+  -- Alice stakes 800 from 1100 inventory → 300 change to operator
+  (svc2, smusdCid) <- submitMulti [alice] [operator] do
+    exerciseCmd stakingSvc StakeFromInventory with
+      user = alice
+      inventoryMusdCids = [inv1, inv2]
+      stakeAmount = 800.0
+
+  -- Verify smUSD position
+  smusd <- queryContractId alice smusdCid
+  case smusd of
+    Some s -> do
+      assertMsg "owner" (s.owner == alice)
+      assertMsg "shares" (s.shares == 800.0)  -- pool empty → sharePrice=1.0 → shares=amount
+      assertMsg "entry price" (s.entrySharePrice == 1.0)
+    None -> abort "smUSD not found"
+
+  -- Verify 300 change returned to operator
+  operatorMusd <- query @CantonMUSD operator
+  let changes = filter (\(_, m) -> m.owner == operator && m.amount == 300.0) operatorMusd
+  assertMsg "change returned" (length changes == 1)
+
+  -- POOL INVARIANT: pooledMusd = 800, totalShares = 800
+  svc <- queryContractId operator svc2
+  case svc of
+    Some s -> do
+      assertMsg "pooledMusd" (s.pooledMusd == 800.0)
+      assertMsg "totalShares" (s.totalShares == 800.0)
+    None -> abort "Service not found"
+  pure ()
+
+-- ============================================================
+--         TEST 27: STAKE FROM INVENTORY — EXACT AMOUNT (NO CHANGE)
+-- ============================================================
+
+test_StakeFromInventoryExact : Script ()
+test_StakeFromInventoryExact = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  regulator <- allocateParty "Regulator"
+  complianceCid <- createCompliance regulator operator
+  stakingSvc <- createStakingService operator complianceCid [alice]
+
+  inv1 <- createMUSD operator operator 500.0
+
+  -- Stake exactly 500 → no change
+  (svc2, smusdCid) <- submitMulti [alice] [operator] do
+    exerciseCmd stakingSvc StakeFromInventory with
+      user = alice
+      inventoryMusdCids = [inv1]
+      stakeAmount = 500.0
+
+  smusd <- queryContractId alice smusdCid
+  case smusd of
+    Some s -> assertMsg "shares" (s.shares == 500.0)
+    None -> abort "smUSD not found"
+
+  -- Only operator-owned mUSD should be the pool (500). No separate change.
+  operatorMusd <- query @CantonMUSD operator
+  let operatorContracts = filter (\(_, m) -> m.owner == operator) operatorMusd
+  assertMsg "only pool mUSD exists" (length operatorContracts == 1)
+  pure ()
+
+-- ============================================================
+--         TEST 28: STAKE FROM INVENTORY — WRONG OWNER
+-- ============================================================
+
+test_StakeFromInventoryWrongOwner : Script ()
+test_StakeFromInventoryWrongOwner = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  regulator <- allocateParty "Regulator"
+  complianceCid <- createCompliance regulator operator
+  stakingSvc <- createStakingService operator complianceCid [alice]
+
+  -- Create alice-owned mUSD (not operator inventory)
+  aliceMusd <- createMUSD operator alice 500.0
+
+  -- Must fail: inventory must be operator-owned
+  submitMultiMustFail [alice] [operator] do
+    exerciseCmd stakingSvc StakeFromInventory with
+      user = alice
+      inventoryMusdCids = [aliceMusd]
+      stakeAmount = 500.0
+  pure ()
+
+-- ============================================================
+--         TEST 29: STAKE FROM INVENTORY — MIXED OWNER
+-- ============================================================
+
+test_StakeFromInventoryMixedOwner : Script ()
+test_StakeFromInventoryMixedOwner = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  regulator <- allocateParty "Regulator"
+  complianceCid <- createCompliance regulator operator
+  stakingSvc <- createStakingService operator complianceCid [alice]
+
+  opInv <- createMUSD operator operator 500.0
+  aliceMusd <- createMUSD operator alice 500.0
+
+  -- Must fail: mixed list
+  submitMultiMustFail [alice] [operator] do
+    exerciseCmd stakingSvc StakeFromInventory with
+      user = alice
+      inventoryMusdCids = [opInv, aliceMusd]
+      stakeAmount = 800.0
+  pure ()
+
+-- ============================================================
+--         TEST 30: STAKE FROM INVENTORY — INSUFFICIENT
+-- ============================================================
+
+test_StakeFromInventoryInsufficient : Script ()
+test_StakeFromInventoryInsufficient = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  regulator <- allocateParty "Regulator"
+  complianceCid <- createCompliance regulator operator
+  stakingSvc <- createStakingService operator complianceCid [alice]
+
+  inv1 <- createMUSD operator operator 100.0
+
+  -- Must fail: 100 < 500
+  submitMultiMustFail [alice] [operator] do
+    exerciseCmd stakingSvc StakeFromInventory with
+      user = alice
+      inventoryMusdCids = [inv1]
+      stakeAmount = 500.0
+  pure ()
+
+-- ============================================================
+--         TEST 31: STAKE FROM INVENTORY — EMPTY LIST
+-- ============================================================
+
+test_StakeFromInventoryEmptyList : Script ()
+test_StakeFromInventoryEmptyList = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  regulator <- allocateParty "Regulator"
+  complianceCid <- createCompliance regulator operator
+  stakingSvc <- createStakingService operator complianceCid [alice]
+
+  -- Must fail: empty list
+  submitMultiMustFail [alice] [operator] do
+    exerciseCmd stakingSvc StakeFromInventory with
+      user = alice
+      inventoryMusdCids = []
+      stakeAmount = 100.0
+  pure ()
+
+-- ============================================================
+--         TEST 32: STAKE FROM INVENTORY — BELOW MIN DEPOSIT
+-- ============================================================
+
+test_StakeFromInventoryBelowMin : Script ()
+test_StakeFromInventoryBelowMin = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  regulator <- allocateParty "Regulator"
+  complianceCid <- createCompliance regulator operator
+  stakingSvc <- createStakingService operator complianceCid [alice]
+
+  inv1 <- createMUSD operator operator 0.5
+
+  -- Must fail: stakeAmount 0.5 < minDeposit 1.0
+  submitMultiMustFail [alice] [operator] do
+    exerciseCmd stakingSvc StakeFromInventory with
+      user = alice
+      inventoryMusdCids = [inv1]
+      stakeAmount = 0.5
+  pure ()
+
+-- ============================================================
+--         TEST 33: STAKE FROM INVENTORY — PAUSED SERVICE
+-- ============================================================
+
+test_StakeFromInventoryPaused : Script ()
+test_StakeFromInventoryPaused = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  regulator <- allocateParty "Regulator"
+  complianceCid <- createCompliance regulator operator
+  stakingSvc <- createStakingService operator complianceCid [alice]
+
+  -- Pause the service (need to know the pause choice name)
+  -- CantonStakingService has a SetPaused choice
+  pausedSvc <- submit operator do
+    createCmd CantonStakingService with
+      operator
+      governance = operator
+      totalShares = 0.0
+      pooledMusd = 0.0
+      poolMusdCid = None
+      globalSharePrice = 1.0
+      globalTotalAssets = 0.0
+      globalTotalShares = 0.0
+      lastSyncEpoch = 0
+      cooldownSeconds = 0
+      minDeposit = 1.0
+      paused = True  -- paused!
+      complianceRegistryCid = complianceCid
+      mpaHash = testMpaHash
+      mpaUri = testMpaUri
+      observers = [alice]
+
+  inv1 <- createMUSD operator operator 500.0
+
+  -- Must fail: service is paused
+  submitMultiMustFail [alice] [operator] do
+    exerciseCmd pausedSvc StakeFromInventory with
+      user = alice
+      inventoryMusdCids = [inv1]
+      stakeAmount = 500.0
+  pure ()
+
+-- ============================================================
+--         TEST 34: STAKE FROM INVENTORY — BLACKLISTED USER
+-- ============================================================
+
+test_StakeFromInventoryBlacklisted : Script ()
+test_StakeFromInventoryBlacklisted = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  regulator <- allocateParty "Regulator"
+  now <- getTime
+
+  -- Create compliance with alice blacklisted
+  complianceCid <- submit regulator do
+    createCmd ComplianceRegistry with
+      regulator; operator
+      blacklisted = Set.fromList [alice]
+      frozen = Set.empty; lastUpdated = now
+
+  stakingSvc <- createStakingService operator complianceCid [alice]
+  inv1 <- createMUSD operator operator 500.0
+
+  -- Must fail: alice is blacklisted
+  submitMultiMustFail [alice] [operator] do
+    exerciseCmd stakingSvc StakeFromInventory with
+      user = alice
+      inventoryMusdCids = [inv1]
+      stakeAmount = 500.0
   pure ()

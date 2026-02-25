@@ -220,6 +220,100 @@ template CantonStakingService
 
         return (newService, smusdCid)
 
+    -- | StakeFromInventory: CIP-56-native stake path.
+    -- Uses operator's own CantonMUSD inventory to stake on behalf of the user,
+    -- without requiring an intermediate user-owned CantonMUSD.
+    -- The CIP-56 token archive happens at the API layer (separate package).
+    --
+    -- Flow:
+    --   1. API archives user's CIP-56 tokens (CIP-56 package)
+    --   2. API creates CIP-56 escrow under operator (CIP-56 package)
+    --   3. This choice consumes operator inventory and deposits into pool
+    --   All submitted as a single atomic batch command.
+    --
+    -- Economic invariants match Stake:
+    --   - Same share price calculation
+    --   - Same pool deposit mechanics (vault-held mUSD)
+    --   - Same compliance validation
+    --   - Same minimum deposit enforcement
+    choice StakeFromInventory : (ContractId CantonStakingService, ContractId CantonSMUSD)
+      with
+        user              : Party
+        inventoryMusdCids : [ContractId CantonMUSD]  -- Operator-owned inventory tokens
+        stakeAmount       : Money                     -- Exact amount to stake
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+        assertMsg "NO_INVENTORY_SOURCES" (not (null inventoryMusdCids))
+        assertMsg "BELOW_MIN_DEPOSIT" (stakeAmount >= minDeposit)
+
+        -- DAML-H-04: Mandatory compliance check — staker must not be blacklisted
+        exercise complianceRegistryCid ValidateMint with minter = user
+
+        -- Validate all inventory mUSD are operator-owned and sum sufficient
+        let validateInv cid = do
+              m <- fetch cid
+              assertMsg "INV_NOT_OPERATOR_OWNED" (m.owner == operator && m.issuer == operator)
+              return m.amount
+        amounts <- mapA validateInv inventoryMusdCids
+        let totalInventory = foldl (+) 0.0 amounts
+        assertMsg "INSUFFICIENT_INVENTORY" (totalInventory >= stakeAmount)
+
+        -- Archive all inventory sources
+        _ <- mapA archive inventoryMusdCids
+
+        -- Return change to operator if inventory exceeds stake amount
+        let change = totalInventory - stakeAmount
+        if change > 0.0
+          then do
+            create CantonMUSD with
+              issuer = operator
+              owner = operator
+              amount = change
+              agreementHash = mpaHash
+              agreementUri = mpaUri
+              privacyObservers = []
+            pure ()
+          else pure ()
+
+        -- Calculate shares (same as Stake)
+        let localSharePrice = if totalShares > 0.0 then pooledMusd / totalShares else 1.0
+        let newShares = stakeAmount / localSharePrice
+
+        -- Deposit into pool vault (same as Stake):
+        --   Create pool-held mUSD (operator-owned — vault holds the tokens)
+        --   Merge with existing vault balance
+        poolDeposit <- create CantonMUSD with
+          issuer = operator
+          owner = operator
+          amount = stakeAmount
+          agreementHash = mpaHash
+          agreementUri = mpaUri
+          privacyObservers = []
+        newPoolCid <- case poolMusdCid of
+          None -> return poolDeposit
+          Some existingCid -> exercise existingCid CantonMUSD_Merge with otherCid = poolDeposit
+
+        -- Issue smUSD shares
+        now <- getTime
+        userObs <- lookupUserObservers operator user None
+        smusdCid <- create CantonSMUSD with
+          issuer = operator
+          owner = user
+          shares = newShares
+          entrySharePrice = localSharePrice
+          stakedAt = now
+          complianceRegistryCid = complianceRegistryCid
+          privacyObservers = userObs
+
+        -- Update pool state: mUSD deposited in vault, shares issued
+        newService <- create this with
+          totalShares = totalShares + newShares
+          pooledMusd = pooledMusd + stakeAmount
+          poolMusdCid = Some newPoolCid
+
+        return (newService, smusdCid)
+
     -- | Unstake: smUSD shares → mUSD withdrawn from vault
     -- User redeems shares for proportional mUSD from the pool vault (fully backed).
     -- mUSD comes from the vault's held CantonMUSD — not minted from nothing.
