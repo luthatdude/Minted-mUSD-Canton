@@ -102,7 +102,6 @@ setupTest = do
       totalBorrows = 0.0
       cantonSupplyCap = 10000000.0  -- 10M mUSD lending cap
       cantonCurrentSupply = 0.0
-      directMintServiceName = "direct-mint"
       globalMintCap = 50000000.0
       interestRateBps = 500       -- 5% APR
       reserveFactorBps = 1000    -- 10%
@@ -331,6 +330,7 @@ testBorrowAgainstCTN = do
       borrowAmount = 500.0
       escrowCids = [escrowCid]
       priceFeedCids = [setup.ctnFeedCid]
+      directMintServiceCid = None
 
   -- Verify debt position
   debt <- queryContractId setup.operator debtCid
@@ -365,6 +365,7 @@ testBorrowExceedsLTV = do
       borrowAmount = 1200.0
       escrowCids = [escrowCid]
       priceFeedCids = [setup.ctnFeedCid]
+      directMintServiceCid = None
   debug "✅ 11. Borrow exceeding LTV rejected"
 
 testBorrowBelowMinimum : Script ()
@@ -389,6 +390,7 @@ testBorrowBelowMinimum = do
       borrowAmount = 5.0
       escrowCids = [escrowCid]
       priceFeedCids = [setup.ctnFeedCid]
+      directMintServiceCid = None
   debug "✅ 12. Borrow below minimum rejected"
 
 -- ============================================================
@@ -417,6 +419,7 @@ testRepayDebt = do
       borrowAmount = 500.0
       escrowCids = [escrowCid]
       priceFeedCids = [setup.ctnFeedCid]
+      directMintServiceCid = None
 
   -- Repay with the borrowed mUSD
   (svc3, newDebtCid) <- submitMulti [setup.user] [setup.operator] do
@@ -492,6 +495,7 @@ testLiquidation = do
       borrowAmount = 1100.0
       escrowCids = [escrowCid]
       priceFeedCids = [setup.ctnFeedCid]
+      directMintServiceCid = None
 
   -- CTN price crashes to $0.10 (emergency override)
   -- 10000 CTN * $0.10 = $1000 raw value
@@ -558,6 +562,7 @@ testLiquidationHealthyPositionFails = do
       borrowAmount = 100.0
       escrowCids = [escrowCid]
       priceFeedCids = [setup.ctnFeedCid]
+      directMintServiceCid = None
 
   -- Liquidator's mUSD
   liqMusdCid <- submitMulti [setup.operator, setup.liquidator] [] do
@@ -624,6 +629,7 @@ testMultiCollateralBorrow = do
       borrowAmount = 1400.0
       escrowCids = [ctnEscrowCid, usdcEscrowCid]
       priceFeedCids = [setup.ctnFeedCid, setup.usdcFeedCid]
+      directMintServiceCid = None
 
   debt <- queryContractId setup.operator debtCid
   assertMsg "Borrowed 1400" ((fromSome debt).principalDebt == 1400.0)
@@ -847,7 +853,6 @@ testWithdrawReserves = do
       totalBorrows = 0.0
       cantonSupplyCap = 10000000.0  -- 10M mUSD lending cap
       cantonCurrentSupply = 0.0
-      directMintServiceName = "direct-mint"
       globalMintCap = 50000000.0
       interestRateBps = 500
       reserveFactorBps = 1000
@@ -925,6 +930,7 @@ testBorrowAgainstUSDCHighLTV = do
       borrowAmount = 9000.0
       escrowCids = [escrowCid]
       priceFeedCids = [setup.usdcFeedCid]
+      directMintServiceCid = None
 
   debt <- queryContractId setup.operator debtCid
   assertMsg "Borrowed 9000" ((fromSome debt).principalDebt == 9000.0)
@@ -957,6 +963,7 @@ testFullLifecycle = do
       borrowAmount = 500.0
       escrowCids = [escrowCid]
       priceFeedCids = [setup.ctnFeedCid]
+      directMintServiceCid = None
 
   -- 3. Repay 500 mUSD
   (svc3, newDebtCid) <- submitMulti [setup.user] [setup.operator] do

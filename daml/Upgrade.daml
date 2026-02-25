@@ -76,9 +76,6 @@ template UpgradeProposal
         && migrationWindowDays > 0
         && rollbackWindowDays >= 0
 
-    key (operator, sourceVersion, targetVersion) : (Party, Text, Text)
-    maintainer key._1
-
     -- | Governance member approves the upgrade
     choice UpgradeProposal_Approve : ContractId UpgradeProposal
       with
@@ -156,9 +153,6 @@ template UpgradeRegistry
 
     ensure totalMigrated >= 0 && totalRolledBack >= 0
 
-    key (operator, sourceVersion, targetVersion) : (Party, Text, Text)
-    maintainer key._1
-
     -- | Record a successful migration (called by MigrationTicket)
     choice UpgradeRegistry_RecordMigration : ContractId UpgradeRegistry
       with
@@ -206,6 +200,7 @@ template MigrationTicket
   with
     operator : Party
     holder : Party                -- Asset owner requesting migration
+    registryCid : ContractId UpgradeRegistry -- Explicit registry reference captured at ticket creation
     upgradeKey : (Party, Text, Text)  -- Reference to UpgradeRegistry
     contractsToMigrate : [Text]   -- Contract IDs to migrate (serialized)
     requestedAt : Time
@@ -225,7 +220,10 @@ template MigrationTicket
         now <- getTime
         
         -- Verify upgrade is still active
-        (registryCid, registry) <- fetchByKey @UpgradeRegistry upgradeKey
+        registry <- fetch registryCid
+        assertMsg "REGISTRY_OPERATOR_MISMATCH" (registry.operator == operator)
+        assertMsg "REGISTRY_VERSION_MISMATCH" (registry.sourceVersion == upgradeKey._2)
+        assertMsg "REGISTRY_VERSION_MISMATCH" (registry.targetVersion == upgradeKey._3)
         assertMsg "UPGRADE_NOT_ACTIVE" (registry.status == Active)
         
         -- Record migration count

@@ -731,8 +731,7 @@ template CantonLendingService
     cantonSupplyCap    : Money                  -- Maximum mUSD mintable via Canton lending
     cantonCurrentSupply : Money                 -- Current mUSD minted via Canton lending
     -- DAML-H-02: Cross-module supply coordination
-    -- The DirectMint service name allows verifying combined supply at borrow time
-    directMintServiceName : Text                -- Key to look up CantonDirectMintService
+    -- The DirectMint service CID is passed to Lending_Borrow when available
     globalMintCap      : Money                  -- Hard ceiling: lending + directMint combined
     -- DAML-H-04: Mandatory compliance check on all borrowers
     complianceRegistryCid : ContractId ComplianceRegistry
@@ -1215,6 +1214,7 @@ template CantonLendingService
         borrowAmount     : Money
         escrowCids       : [ContractId EscrowedCollateral]  -- All user's collateral positions
         priceFeedCids    : [ContractId CantonPriceFeed]     -- Corresponding price feeds
+        directMintServiceCid : Optional (ContractId CantonDirectMintService)
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
@@ -1226,8 +1226,7 @@ template CantonLendingService
 
         -- DAML-H-02: Cross-module supply coordination
         -- Verify combined minting across DirectMint + Lending doesn't exceed global cap
-        directMintOpt <- lookupByKey @CantonDirectMintService (operator, directMintServiceName)
-        case directMintOpt of
+        case directMintServiceCid of
           Some dmCid -> do
             dm <- fetch dmCid
             let combinedSupply = dm.currentSupply + cantonCurrentSupply + borrowAmount

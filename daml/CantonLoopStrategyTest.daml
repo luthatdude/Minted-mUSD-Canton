@@ -966,7 +966,6 @@ testLoopServiceAdmin = do
       paused = False
       cantonSupplyCap = 10000000.0
       cantonCurrentSupply = 0.0
-      directMintServiceName = "direct-mint"
       globalMintCap = 50000000.0
       complianceRegistryCid = setup.registryCid
       mpaHash = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"

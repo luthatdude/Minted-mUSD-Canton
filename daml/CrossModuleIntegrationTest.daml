@@ -173,7 +173,6 @@ testLendingFullCycleIntegration = do
       paused = False
       cantonSupplyCap = 10000000.0
       cantonCurrentSupply = 0.0
-      directMintServiceName = "default"
       globalMintCap = 50000000.0
       complianceRegistryCid = complianceCid
       mpaHash = testMpaHash
@@ -201,6 +200,7 @@ testLendingFullCycleIntegration = do
       borrowAmount = 500.0
       escrowCids = [escrowCid]
       priceFeedCids = [ctnFeedCid]
+      directMintServiceCid = None
 
   -- Verify debt
   debt <- queryContractId operator debtCid
@@ -402,7 +402,6 @@ testLiquidationFlow = do
       paused = False
       cantonSupplyCap = 10000000.0
       cantonCurrentSupply = 0.0
-      directMintServiceName = "default"
       globalMintCap = 50000000.0
       complianceRegistryCid = complianceCid
       mpaHash = testMpaHash
@@ -429,6 +428,7 @@ testLiquidationFlow = do
       borrowAmount = 1100.0
       escrowCids = [escrowCid]
       priceFeedCids = [ctnFeedCid]
+      directMintServiceCid = None
 
   -- Crash price → position undercollateralized
   passTime (hours 1)
@@ -518,7 +518,6 @@ testHealthyPositionNotLiquidatable = do
       paused = False
       cantonSupplyCap = 10000000.0
       cantonCurrentSupply = 0.0
-      directMintServiceName = "default"
       globalMintCap = 50000000.0
       complianceRegistryCid = complianceCid
       mpaHash = testMpaHash
@@ -545,6 +544,7 @@ testHealthyPositionNotLiquidatable = do
       borrowAmount = 100.0
       escrowCids = [escrowCid]
       priceFeedCids = [ctnFeedCid]
+      directMintServiceCid = None
 
   liqMusdCid <- submitMulti [operator, keeper] [] do
     createCmd CantonMUSD with
@@ -630,8 +630,8 @@ testSupplyCapCoordination = do
 
   complianceCid <- createTestComplianceRegistry regulator operator
 
-  -- Create DirectMintService with a key — tests D-M02
-  _dmServiceCid <- submit operator do
+  -- Create DirectMintService for cross-module cap enforcement
+  dmServiceCid <- submit operator do
     createCmd CantonDirectMintService with
       operator
       usdcIssuer = operator
@@ -657,7 +657,7 @@ testSupplyCapCoordination = do
       mpaUri = testMpaUri
       authorizedMinters = [user]
       cantonCoinPrice = None
-      serviceName = "default"  -- D-M02: Key field for cross-module lookup
+      serviceName = "default"
 
   -- Create Lending service pointing to the DirectMint service
   ctnFeedCid <- submit operator do
@@ -682,7 +682,6 @@ testSupplyCapCoordination = do
       paused = False
       cantonSupplyCap = 10000000.0
       cantonCurrentSupply = 0.0
-      directMintServiceName = "default"  -- Points to DirectMint via key
       globalMintCap = 50000000.0         -- Same cap: DM at 40M → only 10M left for lending
       complianceRegistryCid = complianceCid
       mpaHash = testMpaHash
@@ -710,4 +709,5 @@ testSupplyCapCoordination = do
       borrowAmount = 11000000.0
       escrowCids = [escrowCid]
       priceFeedCids = [ctnFeedCid]
+      directMintServiceCid = Some dmServiceCid
   debug "✅ Integration 10: Supply cap coordination between Lending + DirectMint (D-M02)"
