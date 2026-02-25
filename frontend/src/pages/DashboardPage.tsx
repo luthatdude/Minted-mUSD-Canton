@@ -510,11 +510,11 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
         <ProtocolStatsBlock
           apyLabel={data.interestRateBps > 0n ? `${(Number(data.interestRateBps) / 100).toFixed(2)}%` : "--%"}
           totalSupply={formatUSD(data.musdSupply)}
-          totalStaked={formatToken(data.smusdTotalAssets)}
+          totalStaked={formatUSD(data.smusdTotalAssets)}
           stakedSubValue={
             data.smusdTotalSupply > 0n
-              ? `Exchange Rate: 1 smUSD = ${(Number(data.smusdTotalAssets) / Number(data.smusdTotalSupply)).toFixed(4)} mUSD`
-              : "1:1 Exchange Rate"
+              ? `Share Price: ${(Number(data.smusdTotalAssets) / Number(data.smusdTotalSupply)).toFixed(4)} mUSD`
+              : "Staking service not deployed"
           }
         />
       )}
