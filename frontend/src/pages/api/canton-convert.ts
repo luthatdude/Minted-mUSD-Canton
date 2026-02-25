@@ -19,20 +19,27 @@ import * as crypto from "crypto";
 const CANTON_BASE_URL =
   process.env.CANTON_API_URL ||
   `http://${process.env.CANTON_HOST || "localhost"}:${process.env.CANTON_PORT || "7575"}`;
-const CANTON_TOKEN = process.env.CANTON_TOKEN || "dummy-no-auth";
-const CANTON_PARTY =
-  process.env.CANTON_PARTY ||
-  "minted-validator-1::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
+const CANTON_TOKEN = process.env.CANTON_TOKEN || "";
+const CANTON_PARTY = process.env.CANTON_PARTY || "";
 const CANTON_USER = process.env.CANTON_USER || "administrator";
 const PACKAGE_ID =
   process.env.NEXT_PUBLIC_DAML_PACKAGE_ID ||
   process.env.CANTON_PACKAGE_ID ||
-  "0489a86388cc81e3e0bee8dc8f6781229d0e01451c1f2d19deea594255e5993b";
+  "";
 const CIP56_PACKAGE_ID =
   process.env.NEXT_PUBLIC_CIP56_PACKAGE_ID ||
   process.env.CIP56_PACKAGE_ID ||
   "";
 const CANTON_PARTY_PATTERN = /^[A-Za-z0-9._:-]+::1220[0-9a-f]{64}$/i;
+const PKG_ID_PATTERN = /^[0-9a-f]{64}$/i;
+
+function validateRequiredConfig(): string | null {
+  if (!CANTON_PARTY || !CANTON_PARTY_PATTERN.test(CANTON_PARTY))
+    return "CANTON_PARTY not configured";
+  if (!PACKAGE_ID || !PKG_ID_PATTERN.test(PACKAGE_ID))
+    return "CANTON_PACKAGE_ID/NEXT_PUBLIC_DAML_PACKAGE_ID not configured";
+  return null;
+}
 
 const V3_PACKAGE_IDS: string[] = Array.from(new Set([
   PACKAGE_ID,
@@ -143,6 +150,11 @@ export default async function handler(
     return res.status(405).json({ error: "Method not allowed" });
   }
 
+  const configError = validateRequiredConfig();
+  if (configError) {
+    return res.status(500).json({ success: false, error: configError });
+  }
+
   const { party, amount } = req.body || {};
 
   // ── Validate ─────────────────────────────────────────────
@@ -159,8 +171,8 @@ export default async function handler(
     return res.status(400).json({ error: "Amount must be positive" });
   }
 
-  if (!CIP56_PACKAGE_ID) {
-    return res.status(500).json({ error: "CIP56_PACKAGE_ID not configured" });
+  if (!CIP56_PACKAGE_ID || !PKG_ID_PATTERN.test(CIP56_PACKAGE_ID)) {
+    return res.status(500).json({ success: false, error: "CIP56_PACKAGE_ID/NEXT_PUBLIC_CIP56_PACKAGE_ID not configured" });
   }
 
   const operatorParty = CANTON_PARTY;
