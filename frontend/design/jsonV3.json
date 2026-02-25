@@ -1,0 +1,195 @@
+{
+  "specVersion": "3.0.0",
+  "product": "Minted mUSD",
+  "scope": "Frontend",
+  "navigation": [
+    "Dashboard",
+    "Mint",
+    "Stake",
+    "Borrow & Lend",
+    "Bridge",
+    "Points",
+    "Admin"
+  ],
+  "globalRules": {
+    "removeFaucetFromDesign": true,
+    "dashboardParity": {
+      "ethereumMustMatchCanton": true,
+      "cantonMustMatchEthereum": true,
+      "sharedTemplateId": "dashboard.protocol.v3",
+      "singleSharedComponentRequired": true
+    }
+  },
+  "dashboard": {
+    "templateId": "dashboard.protocol.v3",
+    "appliesTo": [
+      "ethereum",
+      "canton"
+    ],
+    "protocolStats": {
+      "title": "Protocol Stats",
+      "metrics": [
+        {
+          "id": "metric_apy",
+          "label": "mUSD APY%",
+          "binding": "protocol.apyPercent",
+          "format": "percent_2dp",
+          "fallback": "--%",
+          "style": {
+            "valueColorToken": "accent.apy",
+            "valueMustNotBePlainWhite": true,
+            "subtitle": "Protocol annual yield",
+            "forbiddenSubtitle": "Lending protocol rate"
+          }
+        },
+        {
+          "id": "metric_total_supply",
+          "label": "Total Supply",
+          "binding": "protocol.totalSupply",
+          "format": "currency_usd"
+        },
+        {
+          "id": "metric_total_staked",
+          "label": "Total Staked",
+          "binding": "protocol.totalStaked",
+          "format": "number_compact"
+        }
+      ],
+      "requiredComponent": {
+        "id": "referral_link",
+        "label": "Referral Link",
+        "binding": "user.referralUrl",
+        "type": "copy_link",
+        "required": true
+      },
+      "forbiddenMetrics": [
+        "supply_utilization",
+        "utilization_progress_bar",
+        "tvl",
+        "total_value_locked"
+      ]
+    },
+    "removeSectionsFromBothChains": [
+      "quick_actions",
+      "fees_and_rates",
+      "musd_supply_block",
+      "treasury_block",
+      "protocol_services_grid"
+    ],
+    "forbiddenHeadings": [
+      "Quick Actions",
+      "Fees & Rates",
+      "mUSD Supply",
+      "Treasury",
+      "Protocol Services",
+      "Supply Utilization"
+    ]
+  },
+  "pointsPage": {
+    "id": "points.v3",
+    "sections": [
+      {
+        "id": "points_header",
+        "fields": [
+          "totalPoints",
+          "currentTier",
+          "globalRank",
+          "epochEndsAt"
+        ]
+      },
+      {
+        "id": "earnings_breakdown",
+        "fields": [
+          "bridgePoints",
+          "stakePoints",
+          "borrowRepayPoints",
+          "holdingPoints",
+          "referralPoints",
+          "bonusMultiplierPoints"
+        ]
+      },
+      {
+        "id": "active_multipliers",
+        "fields": [
+          "multiplierName",
+          "multiplierValue",
+          "expiresAt",
+          "upgradeHint"
+        ]
+      },
+      {
+        "id": "missions",
+        "groups": [
+          "daily",
+          "weekly",
+          "milestones"
+        ]
+      },
+      {
+        "id": "leaderboard",
+        "tabs": [
+          "global",
+          "referrals",
+          "epoch"
+        ]
+      },
+      {
+        "id": "points_activity_ledger",
+        "columns": [
+          "timestamp",
+          "actionType",
+          "basePoints",
+          "multiplier",
+          "netPoints",
+          "referenceId"
+        ]
+      },
+      {
+        "id": "claims_rewards",
+        "fields": [
+          "claimableRewards",
+          "claimHistory",
+          "claimStatus"
+        ]
+      },
+      {
+        "id": "rules_transparency",
+        "fields": [
+          "formulaSummary",
+          "antiAbuseRules",
+          "epochResetRules"
+        ]
+      }
+    ]
+  },
+  "stateVariants": [
+    "loading",
+    "empty",
+    "success",
+    "error",
+    "blocked"
+  ],
+  "blockedStates": [
+    "NO_OPERATOR_INVENTORY",
+    "LOW_OPERATOR_INVENTORY",
+    "WRONG_NETWORK",
+    "SERVICE_UNAVAILABLE"
+  ],
+  "apiContracts": {
+    "dashboard": [
+      "/api/canton-balances",
+      "/api/canton-bridge-preflight",
+      "/api/canton-ops-health"
+    ],
+    "actions": [
+      "/api/canton-command",
+      "/api/canton-convert",
+      "/api/canton-cip56-redeem"
+    ],
+    "points": [
+      "/api/points/summary",
+      "/api/points/ledger",
+      "/api/points/leaderboard"
+    ]
+  }
+}

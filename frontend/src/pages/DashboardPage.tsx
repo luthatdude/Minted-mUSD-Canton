@@ -3,7 +3,8 @@ import { ethers } from "ethers";
 import { StatCard } from "@/components/StatCard";
 import { PageHeader } from "@/components/PageHeader";
 import { Section } from "@/components/Section";
-import { formatUSD, formatToken, formatBps, formatHealthFactor } from "@/lib/format";
+import { formatUSD, formatToken, formatHealthFactor } from "@/lib/format";
+import { ProtocolStatsBlock } from "@/components/ProtocolStatsBlock";
 import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import { useWCContracts } from "@/hooks/useWCContracts";
 import { CONTRACTS, MUSD_DECIMALS } from "@/lib/config";
@@ -246,10 +247,6 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
       </div>
     );
   }
-
-  const utilizationPct = data.supplyCap > 0n 
-    ? (Number(data.musdSupply) / Number(data.supplyCap)) * 100 
-    : 0;
 
   // Calculate portfolio totals
   const portfolioTotal = portfolio ? (
@@ -504,222 +501,24 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
             </Section>
           )}
 
-          {/* Quick Actions */}
-          <Section 
-            title="Quick Actions" 
-            subtitle="Common operations"
-            icon={
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
-            }
-          >
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <ActionCard 
-                title="Mint mUSD"
-                description="Convert USDC to mUSD"
-                icon="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                color="blue"
-                onClick={() => setActiveTab('mint')}
-              />
-              <ActionCard 
-                title="Stake mUSD"
-                description="Earn yield with smUSD"
-                icon="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"
-                color="green"
-                onClick={() => onNavigate?.('stake')}
-              />
-              <ActionCard 
-                title="Borrow mUSD"
-                description="Use collateral to borrow"
-                icon="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"
-                color="purple"
-                onClick={() => onNavigate?.('borrow')}
-              />
-              <ActionCard 
-                title="Bridge to Canton"
-                description="Cross-chain transfer"
-                icon="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"
-                color="yellow"
-                onClick={() => onNavigate?.('bridge')}
-              />
-            </div>
-          </Section>
-
           {/* Referral Widget */}
           <ReferralWidget />
         </>
       )}
 
       {activeTab === 'protocol' && (
-        <>
-          {/* Hero Stats */}
-          <div className="card-gradient-border p-8">
-            <div className="grid gap-8 lg:grid-cols-3">
-              <div className="space-y-2">
-                <p className="text-sm font-medium text-gray-400">Total Value Locked</p>
-                <p className="text-4xl font-bold text-white">{formatUSD(data.totalBacking, 6)}</p>
-                <p className="flex items-center gap-2 text-sm text-emerald-400">
-                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-                  </svg>
-                  Fully backed by USDC
-                </p>
-              </div>
-              <div className="space-y-2">
-                <p className="text-sm font-medium text-gray-400">mUSD Supply</p>
-                <p className="text-4xl font-bold text-gradient">{formatUSD(data.musdSupply)}</p>
-                <div className="mt-2">
-                  <div className="mb-1 flex justify-between text-xs text-gray-500">
-                    <span>Utilization</span>
-                    <span>{utilizationPct.toFixed(1)}%</span>
-                  </div>
-                  <div className="progress">
-                    <div 
-                      className={`progress-bar ${utilizationPct > 90 ? "!bg-red-500" : utilizationPct > 70 ? "!bg-yellow-500" : ""}`}
-                      style={{ width: `${Math.min(utilizationPct, 100)}%` }}
-                    />
-                  </div>
-                </div>
-              </div>
-              <div className="space-y-2">
-                <p className="text-sm font-medium text-gray-400">Total Staked</p>
-                <p className="text-4xl font-bold text-gradient-emerald">{formatToken(data.smusdTotalAssets)}</p>
-                <p className="text-sm text-gray-500">
-                  {data.smusdTotalSupply > 0n 
-                    ? `Exchange Rate: 1 smUSD = ${(Number(data.smusdTotalAssets) / Number(data.smusdTotalSupply)).toFixed(4)} mUSD`
-                    : "1:1 Exchange Rate"
-                  }
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* mUSD Supply Section */}
-          <Section 
-            title="mUSD Supply" 
-            subtitle="Stablecoin issuance metrics"
-            icon={
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            }
-          >
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <StatCard 
-                label="Total Supply" 
-                value={formatUSD(data.musdSupply)} 
-                color="blue" 
-                variant="glow"
-              />
-              <StatCard label="Supply Cap" value={formatUSD(data.supplyCap)} />
-              <StatCard
-                label="Utilization"
-                value={`${utilizationPct.toFixed(1)}%`}
-                color={utilizationPct > 90 ? "red" : utilizationPct > 70 ? "yellow" : "green"}
-              />
-              <StatCard
-                label="Remaining Mintable"
-                value={formatUSD(data.supplyCap > data.musdSupply ? data.supplyCap - data.musdSupply : 0n)}
-              />
-            </div>
-          </Section>
-
-          {/* Treasury Section */}
-          <Section 
-            title="Treasury" 
-            subtitle="USDC backing and yield strategies"
-            icon={
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-              </svg>
-            }
-          >
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <StatCard 
-                label="Total Backing" 
-                value={formatUSD(data.totalBacking, 6)} 
-                color="green" 
-                variant="glow"
-              />
-              <StatCard label="Available Reserves" value={formatUSD(data.availableReserves, 6)} />
-              <StatCard label="Deployed to Strategies" value={formatUSD(data.deployedToStrategies, 6)} color="yellow" />
-            </div>
-          </Section>
-
-          {/* Canton Bridge Section */}
-          <Section 
-            title="Canton Bridge" 
-            subtitle="Cross-chain asset attestation"
-            icon={
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-              </svg>
-            }
-          >
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <StatCard label="Attested Assets" value={formatUSD(data.attestedAssets)} color="blue" />
-              <StatCard label="Collateral Ratio" value={formatBps(data.collateralRatio)} />
-              <StatCard
-                label="Health Ratio"
-                value={formatHealthFactor(data.bridgeHealthRatio)}
-                color={data.bridgeHealthRatio < ethers.parseUnits("1.1", 18) ? "red" : "green"}
-              />
-              <StatCard
-                label="Bridge Status"
-                value={data.bridgePaused ? "PAUSED" : "Active"}
-                color={data.bridgePaused ? "red" : "green"}
-              />
-            </div>
-          </Section>
-
-          {/* Fees & Rates Section */}
-          <Section 
-            title="Fees & Rates" 
-            subtitle="Protocol fee structure"
-            icon={
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-              </svg>
-            }
-          >
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <StatCard label="Mint Fee" value={formatBps(data.mintFeeBps)} color="purple" />
-              <StatCard label="Redeem Fee" value={formatBps(data.redeemFeeBps)} color="purple" />
-              <StatCard label="Borrow Rate (APR)" value={formatBps(data.interestRateBps)} color="yellow" />
-            </div>
-          </Section>
-        </>
+        <ProtocolStatsBlock
+          apyLabel={data.interestRateBps > 0n ? `${(Number(data.interestRateBps) / 100).toFixed(2)}%` : "--%"}
+          totalSupply={formatUSD(data.musdSupply)}
+          totalStaked={formatToken(data.smusdTotalAssets)}
+          stakedSubValue={
+            data.smusdTotalSupply > 0n
+              ? `Exchange Rate: 1 smUSD = ${(Number(data.smusdTotalAssets) / Number(data.smusdTotalSupply)).toFixed(4)} mUSD`
+              : "1:1 Exchange Rate"
+          }
+        />
       )}
     </div>
-  );
-}
-
-// Quick Action Card Component
-function ActionCard({ title, description, icon, color, onClick }: { 
-  title: string; 
-  description: string; 
-  icon: string; 
-  color: 'blue' | 'green' | 'purple' | 'yellow';
-  onClick?: () => void;
-}) {
-  const colorClasses = {
-    blue: 'bg-blue-500/10 border-blue-500/20 hover:border-blue-500/40 text-blue-400',
-    green: 'bg-emerald-500/10 border-emerald-500/20 hover:border-emerald-500/40 text-emerald-400',
-    purple: 'bg-purple-500/10 border-purple-500/20 hover:border-purple-500/40 text-purple-400',
-    yellow: 'bg-yellow-500/10 border-yellow-500/20 hover:border-yellow-500/40 text-yellow-400',
-  };
-
-  return (
-    <button onClick={onClick} className={`rounded-xl border p-4 text-left transition-all ${colorClasses[color]}`}>
-      <div className="mb-3">
-        <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={icon} />
-        </svg>
-      </div>
-      <h4 className="font-semibold text-white">{title}</h4>
-      <p className="text-sm text-gray-400 mt-1">{description}</p>
-    </button>
   );
 }
 
