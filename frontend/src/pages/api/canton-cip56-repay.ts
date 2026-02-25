@@ -9,7 +9,6 @@ import {
   getCip56PackageId,
   getV3PackageIds,
   validateConfig,
-  PKG_ID_PATTERN,
   guardMethod,
   guardBodyParty,
   IdempotencyStore,
@@ -22,36 +21,36 @@ import {
 } from "@/lib/api-hardening";
 
 /**
- * /api/canton-convert — CIP-56 → Redeemable (legacy CantonMUSD) inventory swap.
+ * /api/canton-cip56-repay — CIP-56 Native Lending Repay (Phase 4)
  *
- * Model: Operator holds legacy CantonMUSD inventory. User's CIP-56 tokens
- * are locked (transferred to operator as escrow), and equivalent CantonMUSD
- * is released from operator inventory to user.
+ * Single atomic batch that:
+ *   1. Archives user's CIP-56 tokens
+ *   2. Creates CIP-56 change for user (if inputs > repayAmount)
+ *   3. Creates CIP-56 escrow for operator
+ *   4. Exercises Lending_RepayFromInventory on the lending service
  *
- * Supply invariant: Every conversion archives CIP-56 tokens, re-creates them
- * under the operator (locked escrow), and simultaneously transfers equal-value
- * CantonMUSD from operator to user. Net protocol supply change = 0.
+ * This eliminates the intermediate user-owned CantonMUSD step that the
+ * hybrid flow (canton-convert + Lending_Repay) requires.
  *
- * POST { party: string, amount: string }
- * Returns: { success, convertedAmount, sourceTemplate, targetTemplate, commandId }
+ * POST { party: string, amount: string, debtCid: string }
+ * Returns: { success, mode, repayAmount, commandId }
+ *
+ * Falls back cleanly — if this endpoint returns an error, the caller
+ * should retry with the hybrid flow (canton-convert → Lending_Repay).
  */
 
 // ── Idempotency store (bounded: 1000 entries, 5 min TTL) ────
-interface ConversionRecord {
+interface RepayRecord {
   success: boolean;
-  convertedAmount: string;
-  sourceTemplate: string;
-  targetTemplate: string;
+  mode: string;
+  repayAmount: string;
   commandId: string;
-  lockedCip56Cids: string[];
-  /** First consumed operator source CID (backward-compatible single value). */
-  releasedFromCid: string;
-  /** All consumed operator source CIDs (multi-source). */
-  releasedFromCids: string[];
+  cip56Consumed: number;
+  inventoryConsumed: number;
   timestamp: string;
 }
 
-const conversionLog = new IdempotencyStore<ConversionRecord>();
+const repayLog = new IdempotencyStore<RepayRecord>();
 
 // ── Canton API helpers ─────────────────────────────────────
 interface RawContract {
@@ -133,37 +132,38 @@ export default async function handler(
 ) {
   if (!guardMethod(req, res, "POST")) return;
 
-  const configError = validateConfig();
+  const configError = validateConfig({ requireCip56: true });
   if (configError) {
-    return res.status(500).json({ success: false, error: configError.error });
+    return res.status(500).json({ success: false, error: configError.error, mode: "native" });
   }
 
-  const userParty = guardBodyParty(req, res);
+  const userParty = guardBodyParty(req, res, { extraFields: { mode: "native" } });
   if (!userParty) return;
 
-  const { amount } = req.body || {};
+  const { amount, debtCid } = req.body || {};
 
   if (!amount || typeof amount !== "string") {
-    return res.status(400).json({ error: "Missing amount" });
+    return res.status(400).json({ error: "Missing amount", mode: "native" });
   }
-  const convertAmount = parseAmount(amount);
-  if (convertAmount <= 0) {
-    return res.status(400).json({ error: "Amount must be positive" });
+  const repayAmount = parseAmount(amount);
+  if (repayAmount <= 0) {
+    return res.status(400).json({ error: "Amount must be positive", mode: "native" });
   }
 
-  const CIP56_PACKAGE_ID = getCip56PackageId();
-  if (!CIP56_PACKAGE_ID || !PKG_ID_PATTERN.test(CIP56_PACKAGE_ID)) {
-    return res.status(500).json({ success: false, error: "CIP56_PACKAGE_ID/NEXT_PUBLIC_CIP56_PACKAGE_ID not configured" });
+  if (!debtCid || typeof debtCid !== "string" || debtCid.trim().length === 0) {
+    return res.status(400).json({ error: "Missing debtCid", mode: "native" });
   }
 
   const operatorParty = getCantonParty();
+  const PACKAGE_ID = getPackageId();
+  const CIP56_PACKAGE_ID = getCip56PackageId();
   const V3_PACKAGE_IDS = getV3PackageIds();
 
   try {
     // 1. Get ledger offset
     const { offset } = await cantonRequest<{ offset: number }>("GET", "/v2/state/ledger-end");
 
-    // 2. Query user's CIP56 tokens
+    // 2. Query user's CIP-56 tokens
     const cip56TemplateId = `${CIP56_PACKAGE_ID}:CIP56Interfaces:CIP56MintedMUSD`;
     const userCip56Raw = await queryActiveContracts(userParty, offset, cip56TemplateId);
 
@@ -174,36 +174,46 @@ export default async function handler(
         templateId: c.templateId,
         amount: parseAmount(c.createArgument.amount as string),
         issuer: (c.createArgument.issuer as string) || operatorParty,
+        blacklisted: (c.createArgument.blacklisted as boolean) ?? false,
         agreementHash: (c.createArgument.agreementHash as string) || "",
         agreementUri: (c.createArgument.agreementUri as string) || "",
       }))
       .sort((a, b) => b.amount - a.amount);
 
     const totalCip56 = userCip56.reduce((s, c) => s + c.amount, 0);
-    if (!gte(totalCip56, convertAmount)) {
+    if (!gte(totalCip56, repayAmount)) {
       return res.status(400).json({
-        error: `Insufficient CIP-56 balance: have ${toDisplay(totalCip56)}, need ${toDisplay(convertAmount)}`,
+        error: `Insufficient CIP-56 balance: have ${toDisplay(totalCip56)}, need ${toDisplay(repayAmount)}`,
+        mode: "native",
       });
     }
 
-    // 3. Select CIP56 tokens to lock (greedy, largest-first)
+    // 3. Select CIP-56 tokens to archive (greedy, largest-first)
     const selectedCip56: typeof userCip56 = [];
     let selectedSum = 0;
     for (const c of userCip56) {
-      if (gte(selectedSum, convertAmount)) break;
+      if (gte(selectedSum, repayAmount)) break;
       selectedCip56.push(c);
       selectedSum += c.amount;
     }
 
-    // 4. Check idempotency
+    // 3a. Reject if any selected token is blacklisted (compliance safety)
+    if (selectedCip56.some(c => c.blacklisted)) {
+      return res.status(400).json({
+        error: "One or more CIP-56 tokens are blacklisted and cannot be used for repay",
+        mode: "native",
+      });
+    }
+
+    // 3b. Idempotency check
     const sourceCids = selectedCip56.map(c => c.contractId);
-    const idemKey = deriveIdempotencyKey("convert", sourceCids, toDisplay(convertAmount), userParty);
-    const existing = conversionLog.get(idemKey);
+    const idemKey = deriveIdempotencyKey("repay", sourceCids, toDisplay(repayAmount), userParty, debtCid.trim());
+    const existing = repayLog.get(idemKey);
     if (existing) {
       return res.status(200).json(existing);
     }
 
-    // 5. Discover pool-reserved CIDs to exclude from inventory selection.
+    // 4. Discover pool-reserved CIDs to exclude from inventory
     const reservedCids = new Set<string>();
     for (const pkg of V3_PACKAGE_IDS) {
       try {
@@ -218,18 +228,12 @@ export default async function handler(
         }
       } catch { /* staking service may not exist for all packages */ }
     }
-    if (reservedCids.size > 0) {
-      console.log(`[canton-convert] Excluding ${reservedCids.size} pool-reserved CID(s) from inventory`);
-    }
 
-    // 5b. Query operator's CantonMUSD inventory (excluding reserved pool CIDs)
+    // 5. Query operator's CantonMUSD inventory
     const operatorMusd: Array<{
       contractId: string;
       templateId: string;
       amount: number;
-      issuer: string;
-      agreementHash: string;
-      agreementUri: string;
     }> = [];
 
     for (const pkg of V3_PACKAGE_IDS) {
@@ -243,34 +247,43 @@ export default async function handler(
             contractId: c.contractId,
             templateId: c.templateId,
             amount: parseAmount(c.createArgument.amount as string),
-            issuer: (c.createArgument.issuer as string) || "",
-            agreementHash: (c.createArgument.agreementHash as string) || "",
-            agreementUri: (c.createArgument.agreementUri as string) || "",
           });
         }
       }
     }
 
     const totalOperatorMusd = operatorMusd.reduce((s, c) => s + c.amount, 0);
-    if (!gte(totalOperatorMusd, convertAmount)) {
+    if (!gte(totalOperatorMusd, repayAmount)) {
       return res.status(409).json({
-        error: `Insufficient operator inventory: have ${toDisplay(totalOperatorMusd)} redeemable, need ${toDisplay(convertAmount)}`,
+        error: `Insufficient operator inventory: have ${toDisplay(totalOperatorMusd)}, need ${toDisplay(repayAmount)}`,
         inventoryAvailable: toDisplay(totalOperatorMusd),
+        mode: "native",
       });
     }
 
-    // Select operator CantonMUSD sources (greedy, largest-first)
+    // Select operator inventory CIDs (greedy, largest-first)
     operatorMusd.sort((a, b) => b.amount - a.amount);
-    const selectedOperatorSources: typeof operatorMusd = [];
-    let operatorSelectedSum = 0;
+    const selectedInventory: typeof operatorMusd = [];
+    let inventorySum = 0;
     for (const c of operatorMusd) {
-      if (gte(operatorSelectedSum, convertAmount)) break;
-      selectedOperatorSources.push(c);
-      operatorSelectedSum += c.amount;
+      if (gte(inventorySum, repayAmount)) break;
+      selectedInventory.push(c);
+      inventorySum += c.amount;
     }
 
-    // 6. Build atomic batch command
-    const commandId = `convert-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+    // 6. Query CantonLendingService
+    const svcTemplateId = `${PACKAGE_ID}:CantonLending:CantonLendingService`;
+    const svcContracts = await queryActiveContracts(operatorParty, offset, svcTemplateId);
+    if (svcContracts.length === 0) {
+      return res.status(404).json({
+        error: "CantonLendingService not found",
+        mode: "native",
+      });
+    }
+    const lendingService = svcContracts[0];
+
+    // 7. Build atomic batch command
+    const commandId = `cip56-repay-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
     const commands: unknown[] = [];
     const actAs = Array.from(new Set([userParty, operatorParty]));
     const readAs = actAs;
@@ -278,7 +291,7 @@ export default async function handler(
     const refCip56 = selectedCip56[0];
     const cip56Issuer = refCip56.issuer || operatorParty;
 
-    // A. Archive each selected CIP56 token
+    // A. Archive each selected CIP-56 token
     for (const c of selectedCip56) {
       commands.push({
         ExerciseCommand: {
@@ -290,16 +303,16 @@ export default async function handler(
       });
     }
 
-    // B. Create CIP56 change for user (if inputs > convertAmount)
-    const changeAmount = selectedSum - convertAmount;
-    if (gt(changeAmount, 0)) {
+    // B. Create CIP-56 change for user (if inputs > repayAmount)
+    const cip56Change = selectedSum - repayAmount;
+    if (gt(cip56Change, 0)) {
       commands.push({
         CreateCommand: {
           templateId: cip56TemplateId,
           createArguments: {
             issuer: cip56Issuer,
             owner: userParty,
-            amount: toDamlDecimal(changeAmount),
+            amount: toDamlDecimal(cip56Change),
             blacklisted: false,
             agreementHash: refCip56.agreementHash,
             agreementUri: refCip56.agreementUri,
@@ -309,14 +322,14 @@ export default async function handler(
       });
     }
 
-    // C. Create CIP56 escrow for operator (locked amount)
+    // C. Create CIP-56 escrow for operator (locked amount)
     commands.push({
       CreateCommand: {
         templateId: cip56TemplateId,
         createArguments: {
           issuer: cip56Issuer,
           owner: operatorParty,
-          amount: toDamlDecimal(convertAmount),
+          amount: toDamlDecimal(repayAmount),
           blacklisted: false,
           agreementHash: refCip56.agreementHash,
           agreementUri: refCip56.agreementUri,
@@ -325,57 +338,29 @@ export default async function handler(
       },
     });
 
-    // D. Archive each selected operator CantonMUSD source
-    for (const src of selectedOperatorSources) {
-      commands.push({
-        ExerciseCommand: {
-          templateId: src.templateId,
-          contractId: src.contractId,
-          choice: "Archive",
-          choiceArgument: {},
-        },
-      });
-    }
-
-    // E. Create CantonMUSD for user (released inventory)
-    const refOperator = selectedOperatorSources[0];
+    // D. Exercise Lending_RepayFromInventory
     commands.push({
-      CreateCommand: {
-        templateId: refOperator.templateId,
-        createArguments: {
-          issuer: refOperator.issuer,
-          owner: userParty,
-          amount: toDamlDecimal(convertAmount),
-          agreementHash: refOperator.agreementHash,
-          agreementUri: refOperator.agreementUri,
-          privacyObservers: [],
+      ExerciseCommand: {
+        templateId: svcTemplateId,
+        contractId: lendingService.contractId,
+        choice: "Lending_RepayFromInventory",
+        choiceArgument: {
+          user: userParty,
+          inventoryMusdCids: selectedInventory.map(c => c.contractId),
+          repayAmount: toDamlDecimal(repayAmount),
+          debtCid: debtCid.trim(),
         },
       },
     });
 
-    // F. Create CantonMUSD remainder for operator (partially consumed last source)
-    const operatorRemainder = operatorSelectedSum - convertAmount;
-    if (gt(operatorRemainder, 0)) {
-      const lastSource = selectedOperatorSources[selectedOperatorSources.length - 1];
-      commands.push({
-        CreateCommand: {
-          templateId: lastSource.templateId,
-          createArguments: {
-            issuer: lastSource.issuer,
-            owner: operatorParty,
-            amount: toDamlDecimal(operatorRemainder),
-            agreementHash: lastSource.agreementHash,
-            agreementUri: lastSource.agreementUri,
-            privacyObservers: [],
-          },
-        },
-      });
-    }
+    // 8. Submit atomic batch
+    console.log(
+      `[canton-cip56-repay] NATIVE: ${commands.length} cmds, ` +
+      `${selectedCip56.length} CIP-56 → ${selectedInventory.length} inventory → RepayFromInventory ` +
+      `for ${toDisplay(repayAmount)} mUSD, user=${userParty.slice(0, 30)}`
+    );
 
-    // 7. Submit atomic batch
-    console.log(`[canton-convert] Submitting ${commands.length} cmds (${selectedOperatorSources.length} operator sources): ${toDisplay(convertAmount)} CIP56→CantonMUSD for ${userParty.slice(0, 30)}`);
-
-    await cantonRequest("POST", "/v2/commands/submit-and-wait", {
+    const result = await cantonRequest("POST", "/v2/commands/submit-and-wait", {
       userId: getCantonUser(),
       actAs,
       readAs,
@@ -383,27 +368,26 @@ export default async function handler(
       commands,
     });
 
-    // 8. Record + return
-    const record: ConversionRecord = {
+    // Record idempotency entry
+    const record: RepayRecord = {
       success: true,
-      convertedAmount: toDisplay(convertAmount),
-      sourceTemplate: "CIP56MintedMUSD",
-      targetTemplate: "CantonMUSD",
+      mode: "native",
+      repayAmount: toDisplay(repayAmount),
       commandId,
-      lockedCip56Cids: sourceCids,
-      releasedFromCid: selectedOperatorSources[0].contractId,
-      releasedFromCids: selectedOperatorSources.map(s => s.contractId),
+      cip56Consumed: selectedCip56.length,
+      inventoryConsumed: selectedInventory.length,
       timestamp: new Date().toISOString(),
     };
+    repayLog.set(idemKey, record);
 
-    conversionLog.set(idemKey, record);
-    console.log(`[canton-convert] Conversion complete: ${toDisplay(convertAmount)} CIP56→CantonMUSD`);
-
-    return res.status(200).json(record);
+    return res.status(200).json({
+      ...record,
+      result,
+    });
 
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error("[canton-convert] Error:", message);
-    return res.status(502).json({ success: false, error: message });
+    console.error("[canton-cip56-repay] Error:", message);
+    return res.status(502).json({ success: false, error: message, mode: "native" });
   }
 }

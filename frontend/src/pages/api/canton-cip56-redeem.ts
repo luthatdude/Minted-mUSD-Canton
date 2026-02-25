@@ -1,5 +1,24 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import * as crypto from "crypto";
+import {
+  getCantonBaseUrl,
+  getCantonToken,
+  getCantonParty,
+  getCantonUser,
+  getPackageId,
+  getCip56PackageId,
+  getV3PackageIds,
+  validateConfig,
+  guardMethod,
+  guardBodyParty,
+  IdempotencyStore,
+  deriveIdempotencyKey,
+  parseAmount,
+  gte,
+  gt,
+  toDisplay,
+  toDamlDecimal,
+} from "@/lib/api-hardening";
 
 /**
  * /api/canton-cip56-redeem — CIP-56 Native Redeem (Phase 3)
@@ -20,39 +39,7 @@ import * as crypto from "crypto";
  * should retry with the hybrid flow (canton-convert → DirectMint_Redeem).
  */
 
-const CANTON_BASE_URL =
-  process.env.CANTON_API_URL ||
-  `http://${process.env.CANTON_HOST || "localhost"}:${process.env.CANTON_PORT || "7575"}`;
-const CANTON_TOKEN = process.env.CANTON_TOKEN || "";
-const CANTON_PARTY = process.env.CANTON_PARTY || "";
-const CANTON_USER = process.env.CANTON_USER || "administrator";
-const PACKAGE_ID =
-  process.env.NEXT_PUBLIC_DAML_PACKAGE_ID ||
-  process.env.CANTON_PACKAGE_ID ||
-  "";
-const CIP56_PACKAGE_ID =
-  process.env.NEXT_PUBLIC_CIP56_PACKAGE_ID ||
-  process.env.CIP56_PACKAGE_ID ||
-  "";
-const CANTON_PARTY_PATTERN = /^[A-Za-z0-9._:-]+::1220[0-9a-f]{64}$/i;
-const PKG_ID_PATTERN = /^[0-9a-f]{64}$/i;
-
-const V3_PACKAGE_IDS: string[] = Array.from(new Set([
-  PACKAGE_ID,
-  process.env.CANTON_PACKAGE_ID,
-].filter((id): id is string => typeof id === "string" && id.length === 64)));
-
-function validateRequiredConfig(): string | null {
-  if (!CANTON_PARTY || !CANTON_PARTY_PATTERN.test(CANTON_PARTY))
-    return "CANTON_PARTY not configured";
-  if (!PACKAGE_ID || !PKG_ID_PATTERN.test(PACKAGE_ID))
-    return "CANTON_PACKAGE_ID not configured";
-  if (!CIP56_PACKAGE_ID || !PKG_ID_PATTERN.test(CIP56_PACKAGE_ID))
-    return "CIP56_PACKAGE_ID not configured";
-  return null;
-}
-
-// ── Idempotency store ──────────────────────────────────────
+// ── Idempotency store (bounded: 1000 entries, 5 min TTL) ────
 interface RedeemRecord {
   success: boolean;
   mode: string;
@@ -65,12 +52,7 @@ interface RedeemRecord {
   timestamp: string;
 }
 
-const redeemLog = new Map<string, RedeemRecord>();
-
-function idempotencyKey(sourceCids: string[], amount: string, party: string): string {
-  const sorted = [...sourceCids].sort().join(",");
-  return crypto.createHash("sha256").update(`${sorted}:${amount}:${party}`).digest("hex").slice(0, 32);
-}
+const redeemLog = new IdempotencyStore<RedeemRecord>();
 
 // ── Canton API helpers ─────────────────────────────────────
 interface RawContract {
@@ -80,10 +62,10 @@ interface RawContract {
 }
 
 async function cantonRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const resp = await fetch(`${CANTON_BASE_URL}${path}`, {
+  const resp = await fetch(`${getCantonBaseUrl()}${path}`, {
     method,
     headers: {
-      Authorization: `Bearer ${CANTON_TOKEN}`,
+      Authorization: `Bearer ${getCantonToken()}`,
       "Content-Type": "application/json",
     },
     body: body ? JSON.stringify(body) : undefined,
@@ -150,31 +132,29 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
+  if (!guardMethod(req, res, "POST")) return;
 
-  const configError = validateRequiredConfig();
+  const configError = validateConfig({ requireCip56: true });
   if (configError) {
-    return res.status(500).json({ success: false, error: configError, mode: "native" });
+    return res.status(500).json({ success: false, error: configError.error, mode: "native" });
   }
 
-  const { party, amount } = req.body || {};
+  const userParty = guardBodyParty(req, res, { extraFields: { mode: "native" } });
+  if (!userParty) return;
 
-  if (!party || typeof party !== "string" || !CANTON_PARTY_PATTERN.test(party.trim())) {
-    return res.status(400).json({ error: "Invalid Canton party", mode: "native" });
-  }
-  const userParty = party.trim();
-
+  const { amount } = req.body || {};
   if (!amount || typeof amount !== "string") {
     return res.status(400).json({ error: "Missing amount", mode: "native" });
   }
-  const redeemAmount = parseFloat(amount);
-  if (!Number.isFinite(redeemAmount) || redeemAmount <= 0) {
+  const redeemAmount = parseAmount(amount);
+  if (redeemAmount <= 0) {
     return res.status(400).json({ error: "Amount must be positive", mode: "native" });
   }
 
-  const operatorParty = CANTON_PARTY;
+  const operatorParty = getCantonParty();
+  const PACKAGE_ID = getPackageId();
+  const CIP56_PACKAGE_ID = getCip56PackageId();
+  const V3_PACKAGE_IDS = getV3PackageIds();
 
   try {
     // 1. Get ledger offset
@@ -189,17 +169,18 @@ export default async function handler(
       .map(c => ({
         contractId: c.contractId,
         templateId: c.templateId,
-        amount: parseFloat((c.createArgument.amount as string) || "0"),
+        amount: parseAmount(c.createArgument.amount as string),
         issuer: (c.createArgument.issuer as string) || operatorParty,
+        blacklisted: (c.createArgument.blacklisted as boolean) ?? false,
         agreementHash: (c.createArgument.agreementHash as string) || "",
         agreementUri: (c.createArgument.agreementUri as string) || "",
       }))
       .sort((a, b) => b.amount - a.amount);
 
     const totalCip56 = userCip56.reduce((s, c) => s + c.amount, 0);
-    if (totalCip56 < redeemAmount - 0.000001) {
+    if (!gte(totalCip56, redeemAmount)) {
       return res.status(400).json({
-        error: `Insufficient CIP-56 balance: have ${totalCip56.toFixed(6)}, need ${redeemAmount.toFixed(6)}`,
+        error: `Insufficient CIP-56 balance: have ${toDisplay(totalCip56)}, need ${toDisplay(redeemAmount)}`,
         mode: "native",
       });
     }
@@ -208,14 +189,22 @@ export default async function handler(
     const selectedCip56: typeof userCip56 = [];
     let selectedSum = 0;
     for (const c of userCip56) {
-      if (selectedSum >= redeemAmount - 0.000001) break;
+      if (gte(selectedSum, redeemAmount)) break;
       selectedCip56.push(c);
       selectedSum += c.amount;
     }
 
+    // 3a. Reject if any selected token is blacklisted (compliance safety)
+    if (selectedCip56.some(c => c.blacklisted)) {
+      return res.status(400).json({
+        error: "One or more CIP-56 tokens are blacklisted and cannot be redeemed",
+        mode: "native",
+      });
+    }
+
     // 3b. Idempotency check — if same CIDs + amount + party were already processed, return cached result
     const sourceCids = selectedCip56.map(c => c.contractId);
-    const idemKey = idempotencyKey(sourceCids, redeemAmount.toFixed(6), userParty);
+    const idemKey = deriveIdempotencyKey("redeem", sourceCids, toDisplay(redeemAmount), userParty);
     const existing = redeemLog.get(idemKey);
     if (existing) {
       return res.status(200).json(existing);
@@ -254,17 +243,17 @@ export default async function handler(
           operatorMusd.push({
             contractId: c.contractId,
             templateId: c.templateId,
-            amount: parseFloat((c.createArgument.amount as string) || "0"),
+            amount: parseAmount(c.createArgument.amount as string),
           });
         }
       }
     }
 
     const totalOperatorMusd = operatorMusd.reduce((s, c) => s + c.amount, 0);
-    if (totalOperatorMusd < redeemAmount - 0.000001) {
+    if (!gte(totalOperatorMusd, redeemAmount)) {
       return res.status(409).json({
-        error: `Insufficient operator inventory: have ${totalOperatorMusd.toFixed(6)}, need ${redeemAmount.toFixed(6)}`,
-        inventoryAvailable: totalOperatorMusd.toFixed(6),
+        error: `Insufficient operator inventory: have ${toDisplay(totalOperatorMusd)}, need ${toDisplay(redeemAmount)}`,
+        inventoryAvailable: toDisplay(totalOperatorMusd),
         mode: "native",
       });
     }
@@ -274,7 +263,7 @@ export default async function handler(
     const selectedInventory: typeof operatorMusd = [];
     let inventorySum = 0;
     for (const c of operatorMusd) {
-      if (inventorySum >= redeemAmount - 0.000001) break;
+      if (gte(inventorySum, redeemAmount)) break;
       selectedInventory.push(c);
       inventorySum += c.amount;
     }
@@ -313,14 +302,14 @@ export default async function handler(
 
     // B. Create CIP-56 change for user (if inputs > redeemAmount)
     const cip56Change = selectedSum - redeemAmount;
-    if (cip56Change > 0.000001) {
+    if (gt(cip56Change, 0)) {
       commands.push({
         CreateCommand: {
           templateId: cip56TemplateId,
           createArguments: {
             issuer: cip56Issuer,
             owner: userParty,
-            amount: cip56Change.toFixed(10),
+            amount: toDamlDecimal(cip56Change),
             blacklisted: false,
             agreementHash: refCip56.agreementHash,
             agreementUri: refCip56.agreementUri,
@@ -337,7 +326,7 @@ export default async function handler(
         createArguments: {
           issuer: cip56Issuer,
           owner: operatorParty,
-          amount: redeemAmount.toFixed(10),
+          amount: toDamlDecimal(redeemAmount),
           blacklisted: false,
           agreementHash: refCip56.agreementHash,
           agreementUri: refCip56.agreementUri,
@@ -355,7 +344,7 @@ export default async function handler(
         choiceArgument: {
           user: userParty,
           inventoryMusdCids: selectedInventory.map(c => c.contractId),
-          redeemAmount: redeemAmount.toFixed(10),
+          redeemAmount: toDamlDecimal(redeemAmount),
         },
       },
     });
@@ -364,11 +353,11 @@ export default async function handler(
     console.log(
       `[canton-cip56-redeem] NATIVE: ${commands.length} cmds, ` +
       `${selectedCip56.length} CIP-56 → ${selectedInventory.length} inventory → RedeemFromInventory ` +
-      `for ${redeemAmount.toFixed(6)} mUSD, user=${userParty.slice(0, 30)}`
+      `for ${toDisplay(redeemAmount)} mUSD, user=${userParty.slice(0, 30)}`
     );
 
     const result = await cantonRequest("POST", "/v2/commands/submit-and-wait", {
-      userId: CANTON_USER,
+      userId: getCantonUser(),
       actAs,
       readAs,
       commandId,
@@ -386,9 +375,9 @@ export default async function handler(
     const record: RedeemRecord = {
       success: true,
       mode: "native",
-      redeemAmount: redeemAmount.toFixed(6),
-      feeEstimate: feeEstimate.toFixed(6),
-      netAmount: (redeemAmount - feeEstimate).toFixed(6),
+      redeemAmount: toDisplay(redeemAmount),
+      feeEstimate: toDisplay(feeEstimate),
+      netAmount: toDisplay(redeemAmount - feeEstimate),
       commandId,
       cip56Consumed: selectedCip56.length,
       inventoryConsumed: selectedInventory.length,

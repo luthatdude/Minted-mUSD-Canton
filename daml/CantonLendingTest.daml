@@ -984,3 +984,198 @@ testFullLifecycle = do
   coin <- queryContractId setup.operator returnedCoinCid
   assertMsg "Got all 10000 CTN back" ((fromSome coin).amount == 10000.0)
   debug "✅ 30. Full lifecycle: deposit → borrow → repay → withdraw"
+
+-- ============================================================
+--                     14. REPAY FROM INVENTORY TESTS
+-- ============================================================
+
+-- | Helper: deposit CTN, borrow mUSD, return (serviceCid, debtCid)
+borrowSetup : TestSetup -> Script (ContractId CantonLendingService, ContractId CantonDebtPosition)
+borrowSetup setup = do
+  coinCid <- submitMulti [setup.operator, setup.user] [] do
+    createCmd CantonCoin with
+      issuer = setup.operator
+      owner = setup.user
+      amount = 10000.0
+      privacyObservers = []
+  (svc1, escrowCid) <- submitMulti [setup.user] [setup.operator] do
+    exerciseCmd setup.serviceCid Lending_DepositCTN with
+      user = setup.user
+      coinCid
+  (svc2, debtCid, _) <- submitMulti [setup.user] [setup.operator] do
+    exerciseCmd svc1 Lending_Borrow with
+      user = setup.user
+      borrowAmount = 500.0
+      escrowCids = [escrowCid]
+      priceFeedCids = [setup.ctnFeedCid]
+      directMintServiceCid = None
+  return (svc2, debtCid)
+
+-- | Helper: create operator-owned inventory mUSD
+createOperatorInventory : Party -> Money -> Script (ContractId CantonMUSD)
+createOperatorInventory operator amount =
+  submit operator do
+    createCmd CantonMUSD with
+      issuer = operator
+      owner = operator
+      amount
+      agreementHash = testMpaHash
+      agreementUri = testMpaUri
+      privacyObservers = []
+
+testRepayFromInventoryHappyPath : Script ()
+testRepayFromInventoryHappyPath = do
+  setup <- setupTest
+  (svc2, debtCid) <- borrowSetup setup
+
+  -- Create operator inventory (simulates CIP-56 bridge deposits)
+  inv1 <- createOperatorInventory setup.operator 300.0
+  inv2 <- createOperatorInventory setup.operator 400.0
+
+  -- Repay 500 from 700 inventory → 200 change to operator
+  (svc3, newDebtCid) <- submitMulti [setup.user] [setup.operator] do
+    exerciseCmd svc2 Lending_RepayFromInventory with
+      user = setup.user
+      inventoryMusdCids = [inv1, inv2]
+      repayAmount = 500.0
+      debtCid
+
+  -- Verify debt cleared
+  debt <- queryContractId setup.operator newDebtCid
+  assertMsg "Principal cleared" ((fromSome debt).principalDebt == 0.0)
+
+  -- Verify 200 change returned to operator
+  operatorMusd <- query @CantonMUSD setup.operator
+  let changes = filter (\(_, m) -> m.owner == setup.operator && m.amount == 200.0) operatorMusd
+  assertMsg "Change returned" (length changes == 1)
+
+  -- Verify inventory archived
+  inv1Check <- queryContractId setup.operator inv1
+  inv2Check <- queryContractId setup.operator inv2
+  assertMsg "inv1 archived" (inv1Check == None)
+  assertMsg "inv2 archived" (inv2Check == None)
+
+  -- SUPPLY INVARIANT: cantonCurrentSupply = 0 (was 500, repaid 500)
+  svc <- queryContractId setup.operator svc3
+  assertMsg "Supply at 0" ((fromSome svc).cantonCurrentSupply == 0.0)
+  assertMsg "Borrows at 0" ((fromSome svc).totalBorrows == 0.0)
+  debug "✅ 31. RepayFromInventory happy path"
+
+testRepayFromInventoryExact : Script ()
+testRepayFromInventoryExact = do
+  setup <- setupTest
+  (svc2, debtCid) <- borrowSetup setup
+
+  -- Exact inventory: 500 for 500 repay (no change)
+  inv1 <- createOperatorInventory setup.operator 500.0
+
+  (_, newDebtCid) <- submitMulti [setup.user] [setup.operator] do
+    exerciseCmd svc2 Lending_RepayFromInventory with
+      user = setup.user
+      inventoryMusdCids = [inv1]
+      repayAmount = 500.0
+      debtCid
+
+  debt <- queryContractId setup.operator newDebtCid
+  assertMsg "Principal cleared" ((fromSome debt).principalDebt == 0.0)
+
+  -- No change for operator (no mUSD with amount != 500 borrowed)
+  operatorMusd <- query @CantonMUSD setup.operator
+  let operatorOwned = filter (\(_, m) -> m.owner == setup.operator) operatorMusd
+  assertMsg "No change created" (null operatorOwned)
+  debug "✅ 32. RepayFromInventory exact amount (no change)"
+
+testRepayFromInventoryWrongOwner : Script ()
+testRepayFromInventoryWrongOwner = do
+  setup <- setupTest
+  (svc2, debtCid) <- borrowSetup setup
+
+  -- Create user-owned mUSD (NOT operator inventory)
+  userMusd <- submitMulti [setup.operator, setup.user] [] do
+    createCmd CantonMUSD with
+      issuer = setup.operator
+      owner = setup.user
+      amount = 500.0
+      agreementHash = testMpaHash
+      agreementUri = testMpaUri
+      privacyObservers = []
+
+  -- Must fail: inventory tokens must be operator-owned
+  submitMultiMustFail [setup.user] [setup.operator] do
+    exerciseCmd svc2 Lending_RepayFromInventory with
+      user = setup.user
+      inventoryMusdCids = [userMusd]
+      repayAmount = 500.0
+      debtCid
+  debug "✅ 33. RepayFromInventory wrong owner rejected"
+
+testRepayFromInventoryMixedOwner : Script ()
+testRepayFromInventoryMixedOwner = do
+  setup <- setupTest
+  (svc2, debtCid) <- borrowSetup setup
+
+  -- One operator-owned, one user-owned
+  opInv <- createOperatorInventory setup.operator 300.0
+  userMusd <- submitMulti [setup.operator, setup.user] [] do
+    createCmd CantonMUSD with
+      issuer = setup.operator
+      owner = setup.user
+      amount = 300.0
+      agreementHash = testMpaHash
+      agreementUri = testMpaUri
+      privacyObservers = []
+
+  -- Must fail: mixed list contains non-operator token
+  submitMultiMustFail [setup.user] [setup.operator] do
+    exerciseCmd svc2 Lending_RepayFromInventory with
+      user = setup.user
+      inventoryMusdCids = [opInv, userMusd]
+      repayAmount = 500.0
+      debtCid
+  debug "✅ 34. RepayFromInventory mixed owner rejected"
+
+testRepayFromInventoryInsufficient : Script ()
+testRepayFromInventoryInsufficient = do
+  setup <- setupTest
+  (svc2, debtCid) <- borrowSetup setup
+
+  inv1 <- createOperatorInventory setup.operator 100.0
+
+  -- Must fail: 100 inventory < 500 repay
+  submitMultiMustFail [setup.user] [setup.operator] do
+    exerciseCmd svc2 Lending_RepayFromInventory with
+      user = setup.user
+      inventoryMusdCids = [inv1]
+      repayAmount = 500.0
+      debtCid
+  debug "✅ 35. RepayFromInventory insufficient inventory rejected"
+
+testRepayFromInventoryEmptyList : Script ()
+testRepayFromInventoryEmptyList = do
+  setup <- setupTest
+  (svc2, debtCid) <- borrowSetup setup
+
+  -- Must fail: empty inventory list
+  submitMultiMustFail [setup.user] [setup.operator] do
+    exerciseCmd svc2 Lending_RepayFromInventory with
+      user = setup.user
+      inventoryMusdCids = []
+      repayAmount = 500.0
+      debtCid
+  debug "✅ 36. RepayFromInventory empty list rejected"
+
+testRepayFromInventoryZeroAmount : Script ()
+testRepayFromInventoryZeroAmount = do
+  setup <- setupTest
+  (svc2, debtCid) <- borrowSetup setup
+
+  inv1 <- createOperatorInventory setup.operator 500.0
+
+  -- Must fail: repayAmount = 0
+  submitMultiMustFail [setup.user] [setup.operator] do
+    exerciseCmd svc2 Lending_RepayFromInventory with
+      user = setup.user
+      inventoryMusdCids = [inv1]
+      repayAmount = 0.0
+      debtCid
+  debug "✅ 37. RepayFromInventory zero amount rejected"
