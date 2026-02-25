@@ -8,9 +8,36 @@ Operational procedures for maintaining the Minted mUSD Canton devnet bridge infr
 - Canton participant node accessible (default: `localhost:7575`)
 - Environment configured: `.env.local` with `CANTON_PARTY`, `NEXT_PUBLIC_DAML_PACKAGE_ID`, `NEXT_PUBLIC_CIP56_PACKAGE_ID`
 
+## Daily Verify (One Command)
+
+Run the full verification suite in one command:
+
+```bash
+npm run ops:verify
+```
+
+This runs sequentially: `typecheck:scripts` -> `ops:doctor` -> `ops:topup` (dry-run) -> `ops:canary` (dry-run).
+If any step fails, the chain stops with a non-zero exit code.
+
+**If unhealthy:**
+1. Check the failing step's output for the specific error.
+2. Run `npm run ops:topup -- --target 2000 --chunk 250 --execute --mode protocol` to restore inventory.
+3. Run `npm run ops:canary -- --amount 7571 --execute --require-conversion` to validate the bridge path.
+4. Re-run `npm run ops:verify` to confirm health.
+
 ## Daily Checks
 
-### 1. Operator Health Check
+### 1. Ops Doctor
+
+```bash
+npm run ops:doctor
+```
+
+Runs all diagnostics: env format, API availability, operator health, and stale literal drift.
+Outputs a human-readable table and machine-readable JSON summary.
+Exit code 0 = healthy, 1 = unhealthy.
+
+### 2. Operator Health Check
 
 ```bash
 npm run ops:health
@@ -164,7 +191,19 @@ npm run ops:topup -- --target 2000 --chunk 250 --execute --mode protocol
 
 | Script | Purpose | Default behavior |
 |--------|---------|-----------------|
+| `npm run ops:verify` | Full verification suite (all checks) | Dry-run chain, exits on first failure |
+| `npm run ops:doctor` | Env + API + health + drift diagnostics | Read-only, exits 0/1 |
 | `npm run ops:health` | Check operator inventory health | Read-only query |
 | `npm run ops:topup -- [flags]` | Top up operator inventory | Dry-run (requires `--execute`) |
 | `npm run ops:canary -- [flags]` | E2E bridge path validation | Dry-run (requires `--execute`) |
 | `npm run typecheck:scripts` | Type-check ops scripts | Read-only |
+
+## Failure Signature Quick Map
+
+| Error | Script to run | Expected fix |
+|-------|--------------|-------------|
+| `NO_OPERATOR_INVENTORY` | `ops:topup -- --execute --mode protocol` | Mint operator inventory to floor |
+| `LOW_OPERATOR_INVENTORY` | `ops:topup -- --execute --mode protocol` | Top up to floor target |
+| `BELOW_MIN_AMOUNT` | None (UI bug) | Enforce min amount >= 1.0 in bridge UI |
+| `TEMPLATES_OR_INTERFACES_NOT_FOUND` | `ops:doctor` | Fix package ID in `.env.local` |
+| `COMMAND_PREPROCESSING_FAILED` | None (auto-mitigated) | Check `privacyObservers` injection in `canton-command.ts` |
