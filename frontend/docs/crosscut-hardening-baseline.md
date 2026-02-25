@@ -68,10 +68,10 @@ Location: `frontend/src/lib/api-hardening/`
 | Endpoint | Phase | Status |
 |---|---|---|
 | canton-cip56-redeem | Part 1 (reference) | Migrated |
-| canton-cip56-repay | Part 2 | Pending |
-| canton-cip56-stake | Part 2 | Pending |
-| canton-convert | Part 2 | Pending |
-| canton-command | Part 2 | Pending |
+| canton-cip56-repay | Part 2 | Migrated |
+| canton-cip56-stake | Part 2 | Migrated |
+| canton-convert | Part 2 | Migrated |
+| canton-command | Part 2 | Migrated |
 | canton-balances | Deferred | Low priority (read-only) |
 | canton-bridge-preflight | Deferred | Low priority (read-only) |
 | canton-ops-health | Deferred | Low priority (read-only) |

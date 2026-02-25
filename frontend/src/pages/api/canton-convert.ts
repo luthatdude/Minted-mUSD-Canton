@@ -1,5 +1,25 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import * as crypto from "crypto";
+import {
+  getCantonBaseUrl,
+  getCantonToken,
+  getCantonParty,
+  getCantonUser,
+  getPackageId,
+  getCip56PackageId,
+  getV3PackageIds,
+  validateConfig,
+  PKG_ID_PATTERN,
+  guardMethod,
+  guardBodyParty,
+  IdempotencyStore,
+  deriveIdempotencyKey,
+  parseAmount,
+  gte,
+  gt,
+  toDisplay,
+  toDamlDecimal,
+} from "@/lib/api-hardening";
 
 /**
  * /api/canton-convert — CIP-56 → Redeemable (legacy CantonMUSD) inventory swap.
@@ -16,37 +36,7 @@ import * as crypto from "crypto";
  * Returns: { success, convertedAmount, sourceTemplate, targetTemplate, commandId }
  */
 
-const CANTON_BASE_URL =
-  process.env.CANTON_API_URL ||
-  `http://${process.env.CANTON_HOST || "localhost"}:${process.env.CANTON_PORT || "7575"}`;
-const CANTON_TOKEN = process.env.CANTON_TOKEN || "";
-const CANTON_PARTY = process.env.CANTON_PARTY || "";
-const CANTON_USER = process.env.CANTON_USER || "administrator";
-const PACKAGE_ID =
-  process.env.NEXT_PUBLIC_DAML_PACKAGE_ID ||
-  process.env.CANTON_PACKAGE_ID ||
-  "";
-const CIP56_PACKAGE_ID =
-  process.env.NEXT_PUBLIC_CIP56_PACKAGE_ID ||
-  process.env.CIP56_PACKAGE_ID ||
-  "";
-const CANTON_PARTY_PATTERN = /^[A-Za-z0-9._:-]+::1220[0-9a-f]{64}$/i;
-const PKG_ID_PATTERN = /^[0-9a-f]{64}$/i;
-
-function validateRequiredConfig(): string | null {
-  if (!CANTON_PARTY || !CANTON_PARTY_PATTERN.test(CANTON_PARTY))
-    return "CANTON_PARTY not configured";
-  if (!PACKAGE_ID || !PKG_ID_PATTERN.test(PACKAGE_ID))
-    return "CANTON_PACKAGE_ID/NEXT_PUBLIC_DAML_PACKAGE_ID not configured";
-  return null;
-}
-
-const V3_PACKAGE_IDS: string[] = Array.from(new Set([
-  PACKAGE_ID,
-  process.env.CANTON_PACKAGE_ID,
-].filter((id): id is string => typeof id === "string" && id.length === 64)));
-
-// ── Idempotency store ──────────────────────────────────────
+// ── Idempotency store (bounded: 1000 entries, 5 min TTL) ────
 interface ConversionRecord {
   success: boolean;
   convertedAmount: string;
@@ -61,12 +51,7 @@ interface ConversionRecord {
   timestamp: string;
 }
 
-const conversionLog = new Map<string, ConversionRecord>();
-
-function idempotencyKey(sourceCids: string[], amount: string, party: string): string {
-  const sorted = [...sourceCids].sort().join(",");
-  return crypto.createHash("sha256").update(`${sorted}:${amount}:${party}`).digest("hex").slice(0, 32);
-}
+const conversionLog = new IdempotencyStore<ConversionRecord>();
 
 // ── Canton API helpers ─────────────────────────────────────
 interface RawContract {
@@ -76,10 +61,10 @@ interface RawContract {
 }
 
 async function cantonRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const resp = await fetch(`${CANTON_BASE_URL}${path}`, {
+  const resp = await fetch(`${getCantonBaseUrl()}${path}`, {
     method,
     headers: {
-      Authorization: `Bearer ${CANTON_TOKEN}`,
+      Authorization: `Bearer ${getCantonToken()}`,
       "Content-Type": "application/json",
     },
     body: body ? JSON.stringify(body) : undefined,
@@ -146,36 +131,33 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
+  if (!guardMethod(req, res, "POST")) return;
 
-  const configError = validateRequiredConfig();
+  const configError = validateConfig();
   if (configError) {
-    return res.status(500).json({ success: false, error: configError });
+    return res.status(500).json({ success: false, error: configError.error });
   }
 
-  const { party, amount } = req.body || {};
+  const userParty = guardBodyParty(req, res);
+  if (!userParty) return;
 
-  // ── Validate ─────────────────────────────────────────────
-  if (!party || typeof party !== "string" || !CANTON_PARTY_PATTERN.test(party.trim())) {
-    return res.status(400).json({ error: "Invalid Canton party" });
-  }
-  const userParty = party.trim();
+  const { amount } = req.body || {};
 
   if (!amount || typeof amount !== "string") {
     return res.status(400).json({ error: "Missing amount" });
   }
-  const convertAmount = parseFloat(amount);
-  if (!Number.isFinite(convertAmount) || convertAmount <= 0) {
+  const convertAmount = parseAmount(amount);
+  if (convertAmount <= 0) {
     return res.status(400).json({ error: "Amount must be positive" });
   }
 
+  const CIP56_PACKAGE_ID = getCip56PackageId();
   if (!CIP56_PACKAGE_ID || !PKG_ID_PATTERN.test(CIP56_PACKAGE_ID)) {
     return res.status(500).json({ success: false, error: "CIP56_PACKAGE_ID/NEXT_PUBLIC_CIP56_PACKAGE_ID not configured" });
   }
 
-  const operatorParty = CANTON_PARTY;
+  const operatorParty = getCantonParty();
+  const V3_PACKAGE_IDS = getV3PackageIds();
 
   try {
     // 1. Get ledger offset
@@ -190,7 +172,7 @@ export default async function handler(
       .map(c => ({
         contractId: c.contractId,
         templateId: c.templateId,
-        amount: parseFloat((c.createArgument.amount as string) || "0"),
+        amount: parseAmount(c.createArgument.amount as string),
         issuer: (c.createArgument.issuer as string) || operatorParty,
         agreementHash: (c.createArgument.agreementHash as string) || "",
         agreementUri: (c.createArgument.agreementUri as string) || "",
@@ -198,9 +180,9 @@ export default async function handler(
       .sort((a, b) => b.amount - a.amount);
 
     const totalCip56 = userCip56.reduce((s, c) => s + c.amount, 0);
-    if (totalCip56 < convertAmount - 0.000001) {
+    if (!gte(totalCip56, convertAmount)) {
       return res.status(400).json({
-        error: `Insufficient CIP-56 balance: have ${totalCip56.toFixed(6)}, need ${convertAmount.toFixed(6)}`,
+        error: `Insufficient CIP-56 balance: have ${toDisplay(totalCip56)}, need ${toDisplay(convertAmount)}`,
       });
     }
 
@@ -208,14 +190,14 @@ export default async function handler(
     const selectedCip56: typeof userCip56 = [];
     let selectedSum = 0;
     for (const c of userCip56) {
-      if (selectedSum >= convertAmount - 0.000001) break;
+      if (gte(selectedSum, convertAmount)) break;
       selectedCip56.push(c);
       selectedSum += c.amount;
     }
 
     // 4. Check idempotency
     const sourceCids = selectedCip56.map(c => c.contractId);
-    const idemKey = idempotencyKey(sourceCids, convertAmount.toFixed(6), userParty);
+    const idemKey = deriveIdempotencyKey("convert", sourceCids, toDisplay(convertAmount), userParty);
     const existing = conversionLog.get(idemKey);
     if (existing) {
       return res.status(200).json(existing);
@@ -260,7 +242,7 @@ export default async function handler(
           operatorMusd.push({
             contractId: c.contractId,
             templateId: c.templateId,
-            amount: parseFloat((c.createArgument.amount as string) || "0"),
+            amount: parseAmount(c.createArgument.amount as string),
             issuer: (c.createArgument.issuer as string) || "",
             agreementHash: (c.createArgument.agreementHash as string) || "",
             agreementUri: (c.createArgument.agreementUri as string) || "",
@@ -270,10 +252,10 @@ export default async function handler(
     }
 
     const totalOperatorMusd = operatorMusd.reduce((s, c) => s + c.amount, 0);
-    if (totalOperatorMusd < convertAmount - 0.000001) {
+    if (!gte(totalOperatorMusd, convertAmount)) {
       return res.status(409).json({
-        error: `Insufficient operator inventory: have ${totalOperatorMusd.toFixed(6)} redeemable, need ${convertAmount.toFixed(6)}`,
-        inventoryAvailable: totalOperatorMusd.toFixed(6),
+        error: `Insufficient operator inventory: have ${toDisplay(totalOperatorMusd)} redeemable, need ${toDisplay(convertAmount)}`,
+        inventoryAvailable: toDisplay(totalOperatorMusd),
       });
     }
 
@@ -282,7 +264,7 @@ export default async function handler(
     const selectedOperatorSources: typeof operatorMusd = [];
     let operatorSelectedSum = 0;
     for (const c of operatorMusd) {
-      if (operatorSelectedSum >= convertAmount - 0.000001) break;
+      if (gte(operatorSelectedSum, convertAmount)) break;
       selectedOperatorSources.push(c);
       operatorSelectedSum += c.amount;
     }
@@ -310,14 +292,14 @@ export default async function handler(
 
     // B. Create CIP56 change for user (if inputs > convertAmount)
     const changeAmount = selectedSum - convertAmount;
-    if (changeAmount > 0.000001) {
+    if (gt(changeAmount, 0)) {
       commands.push({
         CreateCommand: {
           templateId: cip56TemplateId,
           createArguments: {
             issuer: cip56Issuer,
             owner: userParty,
-            amount: changeAmount.toFixed(10),
+            amount: toDamlDecimal(changeAmount),
             blacklisted: false,
             agreementHash: refCip56.agreementHash,
             agreementUri: refCip56.agreementUri,
@@ -334,7 +316,7 @@ export default async function handler(
         createArguments: {
           issuer: cip56Issuer,
           owner: operatorParty,
-          amount: convertAmount.toFixed(10),
+          amount: toDamlDecimal(convertAmount),
           blacklisted: false,
           agreementHash: refCip56.agreementHash,
           agreementUri: refCip56.agreementUri,
@@ -363,7 +345,7 @@ export default async function handler(
         createArguments: {
           issuer: refOperator.issuer,
           owner: userParty,
-          amount: convertAmount.toFixed(10),
+          amount: toDamlDecimal(convertAmount),
           agreementHash: refOperator.agreementHash,
           agreementUri: refOperator.agreementUri,
           privacyObservers: [],
@@ -373,7 +355,7 @@ export default async function handler(
 
     // F. Create CantonMUSD remainder for operator (partially consumed last source)
     const operatorRemainder = operatorSelectedSum - convertAmount;
-    if (operatorRemainder > 0.000001) {
+    if (gt(operatorRemainder, 0)) {
       const lastSource = selectedOperatorSources[selectedOperatorSources.length - 1];
       commands.push({
         CreateCommand: {
@@ -381,7 +363,7 @@ export default async function handler(
           createArguments: {
             issuer: lastSource.issuer,
             owner: operatorParty,
-            amount: operatorRemainder.toFixed(10),
+            amount: toDamlDecimal(operatorRemainder),
             agreementHash: lastSource.agreementHash,
             agreementUri: lastSource.agreementUri,
             privacyObservers: [],
@@ -391,10 +373,10 @@ export default async function handler(
     }
 
     // 7. Submit atomic batch
-    console.log(`[canton-convert] Submitting ${commands.length} cmds (${selectedOperatorSources.length} operator sources): ${convertAmount.toFixed(6)} CIP56→CantonMUSD for ${userParty.slice(0, 30)}`);
+    console.log(`[canton-convert] Submitting ${commands.length} cmds (${selectedOperatorSources.length} operator sources): ${toDisplay(convertAmount)} CIP56→CantonMUSD for ${userParty.slice(0, 30)}`);
 
     await cantonRequest("POST", "/v2/commands/submit-and-wait", {
-      userId: CANTON_USER,
+      userId: getCantonUser(),
       actAs,
       readAs,
       commandId,
@@ -404,7 +386,7 @@ export default async function handler(
     // 8. Record + return
     const record: ConversionRecord = {
       success: true,
-      convertedAmount: convertAmount.toFixed(6),
+      convertedAmount: toDisplay(convertAmount),
       sourceTemplate: "CIP56MintedMUSD",
       targetTemplate: "CantonMUSD",
       commandId,
@@ -415,7 +397,7 @@ export default async function handler(
     };
 
     conversionLog.set(idemKey, record);
-    console.log(`[canton-convert] Conversion complete: ${convertAmount.toFixed(6)} CIP56→CantonMUSD`);
+    console.log(`[canton-convert] Conversion complete: ${toDisplay(convertAmount)} CIP56→CantonMUSD`);
 
     return res.status(200).json(record);
 

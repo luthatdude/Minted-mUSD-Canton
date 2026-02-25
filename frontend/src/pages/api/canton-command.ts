@@ -1,5 +1,16 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import * as crypto from "crypto";
+import {
+  getCantonBaseUrl,
+  getCantonToken,
+  getCantonParty,
+  getCantonUser,
+  getPackageId,
+  validateConfig,
+  CANTON_PARTY_PATTERN,
+  PKG_ID_PATTERN,
+  guardMethod,
+} from "@/lib/api-hardening";
 
 /**
  * /api/canton-command — Server-side proxy to submit DAML commands to Canton.
@@ -15,26 +26,7 @@ import * as crypto from "crypto";
  * This keeps the Canton auth token server-side and avoids CORS.
  */
 
-const CANTON_BASE_URL =
-  process.env.CANTON_API_URL ||
-  `http://${process.env.CANTON_HOST || "localhost"}:${process.env.CANTON_PORT || "7575"}`;
-const CANTON_TOKEN = process.env.CANTON_TOKEN || "";
-const CANTON_PARTY = process.env.CANTON_PARTY || "";
 const RECIPIENT_ALIAS_MAP_RAW = process.env.CANTON_RECIPIENT_PARTY_ALIASES || "";
-const CANTON_PARTY_PATTERN = /^[A-Za-z0-9._:-]+::1220[0-9a-f]{64}$/i;
-const PKG_ID_PATTERN = /^[0-9a-f]{64}$/i;
-const CANTON_USER = process.env.CANTON_USER || "administrator";
-const PACKAGE_ID =
-  process.env.NEXT_PUBLIC_DAML_PACKAGE_ID ||
-  process.env.CANTON_PACKAGE_ID ||
-  "";
-
-function validateRequiredConfig(): string | null {
-  if (!CANTON_PARTY || !CANTON_PARTY_PATTERN.test(CANTON_PARTY))
-    return "CANTON_PARTY not configured";
-  // PACKAGE_ID validated conditionally per-request: required only for short-name templates
-  return null;
-}
 const ALLOW_OPERATOR_FALLBACK =
   (process.env.CANTON_ALLOW_OPERATOR_FALLBACK || "").toLowerCase() === "true";
 
@@ -42,36 +34,39 @@ const ALLOW_OPERATOR_FALLBACK =
  * Map short template names to fully-qualified Canton template IDs.
  * Format: "packageId:ModuleName:EntityName"
  */
-const TEMPLATE_MAP: Record<string, string> = {
-  // CantonDirectMint module
-  CantonMUSD:              `${PACKAGE_ID}:CantonDirectMint:CantonMUSD`,
-  CantonUSDC:              `${PACKAGE_ID}:CantonDirectMint:CantonUSDC`,
-  USDCx:                   `${PACKAGE_ID}:CantonDirectMint:USDCx`,
-  CantonDirectMintService: `${PACKAGE_ID}:CantonDirectMint:CantonDirectMintService`,
-  BridgeOutRequest:        `${PACKAGE_ID}:CantonDirectMint:BridgeOutRequest`,
-  // CantonSMUSD module
-  CantonStakingService:    `${PACKAGE_ID}:CantonSMUSD:CantonStakingService`,
-  CantonSMUSD:             `${PACKAGE_ID}:CantonSMUSD:CantonSMUSD`,
-  // CantonETHPool module
-  CantonETHPoolService:    `${PACKAGE_ID}:CantonETHPool:CantonETHPoolService`,
-  CantonSMUSD_E:           `${PACKAGE_ID}:CantonETHPool:CantonSMUSD_E`,
-  // CantonBoostPool module
-  CantonBoostPoolService:  `${PACKAGE_ID}:CantonBoostPool:CantonBoostPoolService`,
-  BoostPoolLP:             `${PACKAGE_ID}:CantonBoostPool:BoostPoolLP`,
-  // CantonLending module
-  CantonLendingService:    `${PACKAGE_ID}:CantonLending:CantonLendingService`,
-  CantonPriceFeed:         `${PACKAGE_ID}:CantonLending:CantonPriceFeed`,
-  EscrowedCollateral:      `${PACKAGE_ID}:CantonLending:EscrowedCollateral`,
-  CantonDebtPosition:      `${PACKAGE_ID}:CantonLending:CantonDebtPosition`,
-  // CantonCoinToken module
-  CantonCoin:              `${PACKAGE_ID}:CantonCoinToken:CantonCoin`,
-  // Minted.Protocol.V3 module
-  BridgeService:           `${PACKAGE_ID}:Minted.Protocol.V3:BridgeService`,
-  MUSDSupplyService:       `${PACKAGE_ID}:Minted.Protocol.V3:MUSDSupplyService`,
-  MintedMUSD:              `${PACKAGE_ID}:Minted.Protocol.V3:MintedMUSD`,
-  // Compliance module
-  ComplianceRegistry:      `${PACKAGE_ID}:Compliance:ComplianceRegistry`,
-};
+function buildTemplateMap(): Record<string, string> {
+  const pkgId = getPackageId();
+  return {
+    // CantonDirectMint module
+    CantonMUSD:              `${pkgId}:CantonDirectMint:CantonMUSD`,
+    CantonUSDC:              `${pkgId}:CantonDirectMint:CantonUSDC`,
+    USDCx:                   `${pkgId}:CantonDirectMint:USDCx`,
+    CantonDirectMintService: `${pkgId}:CantonDirectMint:CantonDirectMintService`,
+    BridgeOutRequest:        `${pkgId}:CantonDirectMint:BridgeOutRequest`,
+    // CantonSMUSD module
+    CantonStakingService:    `${pkgId}:CantonSMUSD:CantonStakingService`,
+    CantonSMUSD:             `${pkgId}:CantonSMUSD:CantonSMUSD`,
+    // CantonETHPool module
+    CantonETHPoolService:    `${pkgId}:CantonETHPool:CantonETHPoolService`,
+    CantonSMUSD_E:           `${pkgId}:CantonETHPool:CantonSMUSD_E`,
+    // CantonBoostPool module
+    CantonBoostPoolService:  `${pkgId}:CantonBoostPool:CantonBoostPoolService`,
+    BoostPoolLP:             `${pkgId}:CantonBoostPool:BoostPoolLP`,
+    // CantonLending module
+    CantonLendingService:    `${pkgId}:CantonLending:CantonLendingService`,
+    CantonPriceFeed:         `${pkgId}:CantonLending:CantonPriceFeed`,
+    EscrowedCollateral:      `${pkgId}:CantonLending:EscrowedCollateral`,
+    CantonDebtPosition:      `${pkgId}:CantonLending:CantonDebtPosition`,
+    // CantonCoinToken module
+    CantonCoin:              `${pkgId}:CantonCoinToken:CantonCoin`,
+    // Minted.Protocol.V3 module
+    BridgeService:           `${pkgId}:Minted.Protocol.V3:BridgeService`,
+    MUSDSupplyService:       `${pkgId}:Minted.Protocol.V3:MUSDSupplyService`,
+    MintedMUSD:              `${pkgId}:Minted.Protocol.V3:MintedMUSD`,
+    // Compliance module
+    ComplianceRegistry:      `${pkgId}:Compliance:ComplianceRegistry`,
+  };
+}
 
 function parseRecipientAliasMap(): Record<string, string> {
   if (!RECIPIENT_ALIAS_MAP_RAW.trim()) return {};
@@ -98,6 +93,7 @@ const RECIPIENT_ALIAS_MAP = parseRecipientAliasMap();
 function resolveTemplateId(tpl: string): string {
   // Already fully qualified (contains ':')
   if (tpl.includes(":")) return tpl;
+  const TEMPLATE_MAP = buildTemplateMap();
   const resolved = TEMPLATE_MAP[tpl];
   if (!resolved) throw new Error(`Unknown template short name: ${tpl}. Use fully qualified ID or add to TEMPLATE_MAP.`);
   return resolved;
@@ -105,7 +101,7 @@ function resolveTemplateId(tpl: string): string {
 
 function resolveRequestedParty(rawParty: unknown): string {
   if (typeof rawParty !== "string" || !rawParty.trim()) {
-    if (ALLOW_OPERATOR_FALLBACK) return CANTON_PARTY;
+    if (ALLOW_OPERATOR_FALLBACK) return getCantonParty();
     throw new Error("Missing Canton party for command submission");
   }
   const party = rawParty.trim();
@@ -129,14 +125,15 @@ function shouldOperatorCosignCreate(
   const owner = typeof payload.owner === "string" ? payload.owner : "";
   if (!issuer || !owner) return false;
 
-  return issuer === CANTON_PARTY && owner === actAsParty && actAsParty !== CANTON_PARTY;
+  const operatorParty = getCantonParty();
+  return issuer === operatorParty && owner === actAsParty && actAsParty !== operatorParty;
 }
 
 async function cantonRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const resp = await fetch(`${CANTON_BASE_URL}${path}`, {
+  const resp = await fetch(`${getCantonBaseUrl()}${path}`, {
     method,
     headers: {
-      "Authorization": `Bearer ${CANTON_TOKEN}`,
+      "Authorization": `Bearer ${getCantonToken()}`,
       "Content-Type": "application/json",
     },
     body: body ? JSON.stringify(body) : undefined,
@@ -155,13 +152,12 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
+  if (!guardMethod(req, res, "POST")) return;
 
-  const configError = validateRequiredConfig();
-  if (configError) {
-    return res.status(500).json({ success: false, error: configError });
+  // Validate core config (party required, package ID validated per-request below)
+  const operatorParty = getCantonParty();
+  if (!operatorParty || !CANTON_PARTY_PATTERN.test(operatorParty)) {
+    return res.status(500).json({ success: false, error: "CANTON_PARTY not configured" });
   }
 
   const { action, templateId, contractId, choice, argument, payload, party } = req.body || {};
@@ -171,6 +167,7 @@ export default async function handler(
   }
 
   // PACKAGE_ID required for short-name templates (no ':'), not for fully-qualified
+  const PACKAGE_ID = getPackageId();
   if (!templateId.includes(":") && (!PACKAGE_ID || !PKG_ID_PATTERN.test(PACKAGE_ID))) {
     return res.status(500).json({ success: false, error: "CANTON_PACKAGE_ID/NEXT_PUBLIC_DAML_PACKAGE_ID not configured" });
   }
@@ -188,7 +185,7 @@ export default async function handler(
   } catch (err: any) {
     return res.status(400).json({ error: err.message || "Invalid Canton party" });
   }
-  const baseReadAsParties = Array.from(new Set([actAsParty, CANTON_PARTY]));
+  const baseReadAsParties = Array.from(new Set([actAsParty, operatorParty]));
 
   const commandId = `ui-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
 
@@ -212,12 +209,12 @@ export default async function handler(
       }
 
       const createActAs = shouldOperatorCosignCreate(resolvedTemplateId, createPayload, actAsParty)
-        ? Array.from(new Set([actAsParty, CANTON_PARTY]))
+        ? Array.from(new Set([actAsParty, operatorParty]))
         : [actAsParty];
       const createReadAs = Array.from(new Set([...baseReadAsParties, ...createActAs]));
 
       const body = {
-        userId: CANTON_USER,
+        userId: getCantonUser(),
         actAs: createActAs,
         readAs: createReadAs,
         commandId,
@@ -242,7 +239,7 @@ export default async function handler(
       }
 
       const body = {
-        userId: CANTON_USER,
+        userId: getCantonUser(),
         actAs: [actAsParty],
         readAs: baseReadAsParties,
         commandId,
