@@ -68,9 +68,8 @@ const CANTON_ADMIN_URL =
   process.env.CANTON_API_URL ||
   `http://${process.env.CANTON_HOST || "localhost"}:${process.env.CANTON_PORT || "7575"}`;
 const CANTON_ADMIN_TOKEN = process.env.CANTON_ADMIN_TOKEN || "";
-const CANTON_OPERATOR_PARTY =
-  process.env.CANTON_PARTY ||
-  "minted-validator-1::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
+const CANTON_OPERATOR_PARTY = process.env.CANTON_PARTY || "";
+const CANTON_PARTY_PATTERN = /^[A-Za-z0-9._:-]+::1220[0-9a-f]{64}$/i;
 
 function partyHintFromEth(ethAddress: string): string {
   return `minted-user-${ethAddress.toLowerCase().slice(2, 10)}`;
@@ -98,17 +97,13 @@ async function findPartyByHint(partyHint: string): Promise<string | null> {
 }
 
 function getLocalPartyNamespace(): string {
-  const fallback =
-    "minted-validator-1::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
-  const party = process.env.CANTON_PARTY || fallback;
+  const party = process.env.CANTON_PARTY || "";
+  if (!party || !CANTON_PARTY_PATTERN.test(party)) {
+    throw new Error("CANTON_PARTY not configured or invalid format");
+  }
   const ns = party.split("::")[1];
-  // Namespace should be 1220 + 64 hex chars.
   if (!ns || !/^1220[0-9a-f]{64}$/i.test(ns)) {
-    const fallbackNs = fallback.split("::")[1];
-    if (!fallbackNs || !/^1220[0-9a-f]{64}$/i.test(fallbackNs)) {
-      throw new Error(`Invalid CANTON_PARTY format: ${party}`);
-    }
-    return fallbackNs;
+    throw new Error(`Invalid CANTON_PARTY namespace: ${party}`);
   }
   return ns;
 }
@@ -220,7 +215,7 @@ async function ensureComplianceEntry(
 
     // Canton 3.4 JSON API v2: use eventFormat with cumulative TemplateFilter
     const PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID ||
-      "0489a86388cc81e3e0bee8dc8f6781229d0e01451c1f2d19deea594255e5993b";
+      process.env.CANTON_PACKAGE_ID || "";
     const queryResp = await fetch(`${CANTON_ADMIN_URL}/v2/state/active-contracts?limit=200`, {
       method: "POST",
       headers: {
@@ -292,6 +287,11 @@ export default async function handler(
     OnboardStatusResponse | ProvisionResponse | KycCheckResponse | ErrorResponse
   >
 ) {
+  // Config gate: Canton party is required for all onboard operations
+  if (!CANTON_OPERATOR_PARTY || !CANTON_PARTY_PATTERN.test(CANTON_OPERATOR_PARTY)) {
+    return res.status(500).json({ error: "CANTON_PARTY not configured" });
+  }
+
   const action = req.query.action as string;
 
   // ── GET: Check onboarding status ──────────────────────────
