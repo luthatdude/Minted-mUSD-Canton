@@ -14,6 +14,9 @@ export {}; // module boundary — prevents global scope conflicts with other scr
  *   --base-url <u>          Frontend API base URL (default: http://localhost:3001)
  *   --require-conversion    Fail if conversion would not occur (default: true)
  *   --allow-redeem-only     Allow redeem-only path without conversion
+ *   --force-conversion-probe Force a CIP-56→redeemable conversion regardless of existing
+ *                             redeemable balance, then constrain redeem to the newly
+ *                             converted CID(s). Implies --require-conversion.
  *
  * Assertions (all checked when --execute):
  *   1. No template-not-found or config errors in responses
@@ -22,6 +25,8 @@ export {}; // module boundary — prevents global scope conflicts with other scr
  *   4. Redeemable balance changes as expected
  *   5. Redeem command succeeds
  *   6. MIN_REDEEM >= 1.0 enforced for token selection
+ *   7. conversion_path_executed (force mode only): conversion succeeded AND
+ *      redeem consumed a CID created by this conversion run
  */
 
 const args = process.argv.slice(2);
@@ -38,9 +43,11 @@ const BASE_URL = getArg("base-url", "http://localhost:3001");
 const PARTY = getArg("party",
   process.env.CANTON_CANARY_PARTY || "minted-canary::122006df00c631440327e68ba87f61795bbcd67db26142e580137e5038649f22edce"
 );
+// --force-conversion-probe always converts, regardless of existing redeemable balance
+const FORCE_CONVERSION = hasFlag("force-conversion-probe");
 // --require-conversion defaults to true unless --allow-redeem-only is passed
-const ALLOW_REDEEM_ONLY = hasFlag("allow-redeem-only");
-const REQUIRE_CONVERSION = hasFlag("require-conversion") || !ALLOW_REDEEM_ONLY;
+const ALLOW_REDEEM_ONLY = hasFlag("allow-redeem-only") && !FORCE_CONVERSION;
+const REQUIRE_CONVERSION = FORCE_CONVERSION || hasFlag("require-conversion") || !ALLOW_REDEEM_ONLY;
 const MIN_REDEEM = 1.0;
 
 interface Preflight {
@@ -88,13 +95,24 @@ async function fetchBalances(): Promise<Balances> {
   return resp.json() as Promise<Balances>;
 }
 
-async function convert(amount: number): Promise<{ success: boolean; convertedAmount?: string; error?: string }> {
+interface ConvertResult {
+  success: boolean;
+  convertedAmount?: string;
+  error?: string;
+  commandId?: string;
+  /** Archived operator inventory CIDs (consumed sources). */
+  releasedFromCids?: string[];
+  /** Archived user CIP-56 CIDs (locked as escrow). */
+  lockedCip56Cids?: string[];
+}
+
+async function convert(amount: number): Promise<ConvertResult> {
   const resp = await fetch(`${BASE_URL}/api/canton-convert`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ party: PARTY, amount: amount.toString() }),
   });
-  return resp.json() as Promise<{ success: boolean; convertedAmount?: string; error?: string }>;
+  return resp.json() as Promise<ConvertResult>;
 }
 
 async function exerciseRedeem(serviceCid: string, tokenCid: string): Promise<{ success: boolean; error?: string }> {
@@ -122,7 +140,7 @@ function checkForKnownErrors(blockers: string[]): boolean {
 }
 
 async function main() {
-  console.log(`[canary] amount=${AMOUNT} execute=${EXECUTE} require-conversion=${REQUIRE_CONVERSION}`);
+  console.log(`[canary] amount=${AMOUNT} execute=${EXECUTE} require-conversion=${REQUIRE_CONVERSION} force-conversion=${FORCE_CONVERSION}`);
   console.log(`[canary] party=${PARTY.slice(0, 30)}...`);
   console.log(`[canary] base=${BASE_URL}\n`);
 
@@ -158,16 +176,40 @@ async function main() {
     process.exit(1);
   }
 
-  const wouldConvert = AMOUNT > redeemableBefore && cip56Before > 0;
-  const convertAmount = wouldConvert ? Math.min(AMOUNT - redeemableBefore, cip56Before, opInv) : 0;
+  // Determine conversion strategy
+  let wouldConvert: boolean;
+  let convertAmount: number;
+
+  if (FORCE_CONVERSION) {
+    // Force mode: always convert regardless of redeemable balance
+    if (cip56Before < MIN_REDEEM) {
+      console.error(`[canary] FAIL — --force-conversion-probe requires CIP-56 balance >= ${MIN_REDEEM}, have ${cip56Before.toFixed(2)}`);
+      assert("force_conversion_precondition", false, `cip56=${cip56Before.toFixed(2)} < MIN_REDEEM=${MIN_REDEEM}`);
+      printSummary();
+      process.exit(1);
+    }
+    if (opInv < MIN_REDEEM) {
+      console.error(`[canary] FAIL — --force-conversion-probe requires operator inventory >= ${MIN_REDEEM}, have ${opInv.toFixed(2)}`);
+      assert("force_conversion_precondition", false, `opInv=${opInv.toFixed(2)} < MIN_REDEEM=${MIN_REDEEM}`);
+      printSummary();
+      process.exit(1);
+    }
+    wouldConvert = true;
+    convertAmount = Math.min(MIN_REDEEM, cip56Before, opInv);
+    console.log(`[canary] FORCE CONVERSION MODE: converting ${convertAmount.toFixed(6)} CIP-56 → redeemable`);
+  } else {
+    wouldConvert = AMOUNT > redeemableBefore && cip56Before > 0;
+    convertAmount = wouldConvert ? Math.min(AMOUNT - redeemableBefore, cip56Before, opInv) : 0;
+  }
 
   console.log(`[canary] wouldConvert=${wouldConvert} convertAmount=${convertAmount.toFixed(6)}\n`);
 
-  // Enforce --require-conversion
+  // Enforce --require-conversion (skipped in force mode since wouldConvert is always true)
   if (REQUIRE_CONVERSION && !wouldConvert) {
     console.error("[canary] FAIL — --require-conversion is set but no conversion would occur.");
     console.error(`[canary] redeemable (${redeemableBefore.toFixed(2)}) already covers amount (${AMOUNT}).`);
     console.error("[canary] To test redeem-only path, pass --allow-redeem-only.");
+    console.error("[canary] To force a conversion probe regardless, pass --force-conversion-probe.");
     assert("require_conversion", false, `redeemable ${redeemableBefore.toFixed(2)} >= amount ${AMOUNT}`);
     printSummary();
     process.exit(1);
@@ -179,7 +221,15 @@ async function main() {
     process.exit(0);
   }
 
-  // Step 3: Convert if needed
+  // Step 3: Pre-conversion CID snapshot (for force mode CID-constrained redeem)
+  let preConversionCids = new Set<string>();
+  if (FORCE_CONVERSION) {
+    const preConvBal = await fetchBalances();
+    preConversionCids = new Set(preConvBal.tokens.map(t => t.contractId));
+    console.log(`[canary] Pre-conversion CID snapshot: ${preConversionCids.size} existing token(s)`);
+  }
+
+  // Step 3b: Convert if needed
   let conversionOk = true;
   if (wouldConvert && convertAmount > 0) {
     console.log(`[canary] Converting ${convertAmount.toFixed(6)} CIP-56 → redeemable...`);
@@ -248,21 +298,39 @@ async function main() {
   assert("redeem_service_exists", true, `service=${bal.directMintService.contractId.slice(0, 20)}...`);
 
   // Select token: enforce MIN_REDEEM, prefer smallest eligible token
-  const eligibleTokens = bal.tokens
-    .filter((t) => parseFloat(t.amount) >= MIN_REDEEM)
-    .sort((a, b) => parseFloat(a.amount) - parseFloat(b.amount));
+  // In force mode, constrain to CIDs that appeared AFTER conversion (newly created)
+  let eligibleTokens: Array<{ contractId: string; amount: string }>;
 
-  assert("min_redeem_enforced", true, `MIN_REDEEM=${MIN_REDEEM}, eligible tokens=${eligibleTokens.length}`);
+  if (FORCE_CONVERSION && conversionOk) {
+    const newCids = bal.tokens.filter(t => !preConversionCids.has(t.contractId));
+    console.log(`[canary] Force mode: ${newCids.length} new CID(s) from conversion, ${preConversionCids.size} pre-existing`);
+    eligibleTokens = newCids
+      .filter((t) => parseFloat(t.amount) >= MIN_REDEEM)
+      .sort((a, b) => parseFloat(a.amount) - parseFloat(b.amount));
+  } else {
+    eligibleTokens = bal.tokens
+      .filter((t) => parseFloat(t.amount) >= MIN_REDEEM)
+      .sort((a, b) => parseFloat(a.amount) - parseFloat(b.amount));
+  }
+
+  assert("min_redeem_enforced", true,
+    `MIN_REDEEM=${MIN_REDEEM}, eligible tokens=${eligibleTokens.length}${FORCE_CONVERSION ? " (force-constrained)" : ""}`);
 
   if (eligibleTokens.length === 0) {
-    console.error("[canary] FAIL — no tokens >= MIN_REDEEM available for redeem exercise.");
-    assert("redeem_token_found", false, `no tokens >= ${MIN_REDEEM} mUSD`);
+    if (FORCE_CONVERSION) {
+      console.error("[canary] FAIL — force mode: no newly-converted tokens >= MIN_REDEEM available for redeem.");
+    } else {
+      console.error("[canary] FAIL — no tokens >= MIN_REDEEM available for redeem exercise.");
+    }
+    assert("redeem_token_found", false, `no tokens >= ${MIN_REDEEM} mUSD${FORCE_CONVERSION ? " (from this conversion)" : ""}`);
     printSummary();
     process.exit(1);
   }
 
   const redeemToken = eligibleTokens[0];
-  assert("redeem_token_found", true, `cid=${redeemToken.contractId.slice(0, 20)}... amount=${redeemToken.amount}`);
+  const isNewCid = FORCE_CONVERSION ? !preConversionCids.has(redeemToken.contractId) : false;
+  assert("redeem_token_found", true,
+    `cid=${redeemToken.contractId.slice(0, 20)}... amount=${redeemToken.amount}${FORCE_CONVERSION ? ` newCid=${isNewCid}` : ""}`);
 
   console.log(`[canary] Exercising DirectMint_Redeem on token ${redeemToken.contractId.slice(0, 30)}... (${redeemToken.amount} mUSD)`);
   const redeemResult = await exerciseRedeem(bal.directMintService.contractId, redeemToken.contractId);
@@ -279,6 +347,17 @@ async function main() {
   } else {
     assert("redeem_success", true, "redeem command succeeded");
     console.log("[canary] Redeem OK");
+  }
+
+  // Step 6: conversion_path_executed assertion (force mode only)
+  if (FORCE_CONVERSION) {
+    const pathExecuted = conversionOk && isNewCid && redeemResult.success;
+    assert("conversion_path_executed", pathExecuted,
+      pathExecuted
+        ? "conversion succeeded AND redeem consumed a newly-converted CID"
+        : `conversion=${conversionOk} newCid=${isNewCid} redeemOk=${redeemResult.success}`);
+  } else {
+    skip("conversion_path_executed", "not in force-conversion-probe mode");
   }
 
   printSummary();
