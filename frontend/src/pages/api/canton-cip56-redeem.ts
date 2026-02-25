@@ -52,6 +52,26 @@ function validateRequiredConfig(): string | null {
   return null;
 }
 
+// ── Idempotency store ──────────────────────────────────────
+interface RedeemRecord {
+  success: boolean;
+  mode: string;
+  redeemAmount: string;
+  feeEstimate: string;
+  netAmount: string;
+  commandId: string;
+  cip56Consumed: number;
+  inventoryConsumed: number;
+  timestamp: string;
+}
+
+const redeemLog = new Map<string, RedeemRecord>();
+
+function idempotencyKey(sourceCids: string[], amount: string, party: string): string {
+  const sorted = [...sourceCids].sort().join(",");
+  return crypto.createHash("sha256").update(`${sorted}:${amount}:${party}`).digest("hex").slice(0, 32);
+}
+
 // ── Canton API helpers ─────────────────────────────────────
 interface RawContract {
   contractId: string;
@@ -191,6 +211,14 @@ export default async function handler(
       if (selectedSum >= redeemAmount - 0.000001) break;
       selectedCip56.push(c);
       selectedSum += c.amount;
+    }
+
+    // 3b. Idempotency check — if same CIDs + amount + party were already processed, return cached result
+    const sourceCids = selectedCip56.map(c => c.contractId);
+    const idemKey = idempotencyKey(sourceCids, redeemAmount.toFixed(6), userParty);
+    const existing = redeemLog.get(idemKey);
+    if (existing) {
+      return res.status(200).json(existing);
     }
 
     // 4. Discover pool-reserved CIDs to exclude from inventory
@@ -354,7 +382,8 @@ export default async function handler(
       : 30;
     const feeEstimate = redeemAmount * redeemFeeBps / 10000;
 
-    return res.status(200).json({
+    // Record idempotency entry
+    const record: RedeemRecord = {
       success: true,
       mode: "native",
       redeemAmount: redeemAmount.toFixed(6),
@@ -363,6 +392,12 @@ export default async function handler(
       commandId,
       cip56Consumed: selectedCip56.length,
       inventoryConsumed: selectedInventory.length,
+      timestamp: new Date().toISOString(),
+    };
+    redeemLog.set(idemKey, record);
+
+    return res.status(200).json({
+      ...record,
       result,
     });
 

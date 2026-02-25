@@ -876,6 +876,12 @@ test_RedeemFromInventory = script do
   inv2Check <- queryContractId operator inv2
   assertMsg "inv1 archived" (inv1Check == None)
   assertMsg "inv2 archived" (inv2Check == None)
+
+  -- SUPPLY INVARIANT: currentSupply must be unchanged (inventory was never tracked)
+  svc2Data <- queryContractId operator svc2
+  case svc2Data of
+    Some svc -> assertMsg "currentSupply unchanged" (svc.currentSupply == 0.0)
+    None -> abort "New service contract not found"
   pure ()
 
 -- ============================================================
@@ -1048,4 +1054,28 @@ test_RedeemFromInventoryBlacklisted = script do
       user = alice
       inventoryMusdCids = [inv1]
       redeemAmount = 500.0
+  pure ()
+
+-- ============================================================
+--         TEST 25: REDEEM FROM INVENTORY — MIXED OWNER LIST
+-- ============================================================
+
+test_RedeemFromInventoryMixedOwner : Script ()
+test_RedeemFromInventoryMixedOwner = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  regulator <- allocateParty "Regulator"
+  complianceCid <- createCompliance regulator operator
+  mintSvc <- createMintService operator operator complianceCid [alice]
+
+  -- Create one operator-owned and one alice-owned mUSD
+  operatorInv <- createMUSD operator operator 500.0
+  aliceMusd <- createMUSD operator alice 500.0
+
+  -- Must fail: mixed list contains non-operator-owned token
+  submitMultiMustFail [alice] [operator] do
+    exerciseCmd mintSvc DirectMint_RedeemFromInventory with
+      user = alice
+      inventoryMusdCids = [operatorInv, aliceMusd]
+      redeemAmount = 800.0
   pure ()

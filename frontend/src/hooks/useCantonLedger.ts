@@ -353,6 +353,8 @@ export async function nativeCip56Redeem(
   netAmount?: string;
   commandId?: string;
   error?: string;
+  /** HTTP status from the API — callers use this to distinguish business errors (4xx) from infra errors (5xx). */
+  httpStatus?: number;
 }> {
   const resp = await fetch("/api/canton-cip56-redeem", {
     method: "POST",
@@ -362,11 +364,11 @@ export async function nativeCip56Redeem(
   const contentType = resp.headers.get("content-type") || "";
   if (!contentType.includes("application/json")) {
     const text = await resp.text().catch(() => "Unknown error");
-    return { success: false, mode: "native", error: `HTTP ${resp.status}: ${text.slice(0, 300)}` };
+    return { success: false, mode: "native", httpStatus: resp.status, error: `HTTP ${resp.status}: ${text.slice(0, 300)}` };
   }
   const result = await resp.json();
   if (!resp.ok || result.error) {
-    return { success: false, mode: "native", error: result.error || `HTTP ${resp.status}` };
+    return { success: false, mode: "native", httpStatus: resp.status, error: result.error || `HTTP ${resp.status}` };
   }
   return result;
 }

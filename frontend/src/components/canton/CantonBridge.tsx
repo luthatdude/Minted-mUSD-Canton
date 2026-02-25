@@ -183,8 +183,16 @@ export function CantonBridge() {
           return;
         }
 
-        // Native failed — fall back to hybrid flow
-        console.warn("[CantonBridge] Native redeem failed, falling back to hybrid:", nativeResult.error);
+        // Native failed — classify the error before deciding whether to fall back.
+        // Business errors (400: blacklisted, paused, insufficient balance, below min)
+        // should surface immediately. Only infra errors (502/5xx, 409 inventory)
+        // warrant falling back to the hybrid flow.
+        const status = nativeResult.httpStatus ?? 0;
+        const isBizError = status === 400 || status === 404;
+        if (isBizError) {
+          throw new Error(nativeResult.error || "Redeem rejected");
+        }
+        console.warn("[CantonBridge] Native redeem infra error, falling back to hybrid:", nativeResult.error);
       }
 
       // ── HYBRID FALLBACK PATH ───────────────────────────────────
