@@ -374,6 +374,83 @@ export async function nativeCip56Redeem(
 }
 
 /**
+ * CIP-56 Native Repay — single atomic batch (Phase 4).
+ * Archives user's CIP-56 tokens + exercises Lending_RepayFromInventory
+ * in one transaction, eliminating the intermediate user-owned CantonMUSD step.
+ *
+ * Returns { success, mode: "native", repayAmount, commandId }
+ * on success, or { success: false, error, mode: "native" } on failure.
+ * Callers should fall back to the hybrid flow (convertCip56ToRedeemable + Lending_Repay)
+ * if this fails with an infra error (5xx/409).
+ */
+export async function nativeCip56Repay(
+  party: string,
+  amount: number,
+  debtCid: string
+): Promise<{
+  success: boolean;
+  mode: string;
+  repayAmount?: string;
+  commandId?: string;
+  error?: string;
+  httpStatus?: number;
+}> {
+  const resp = await fetch("/api/canton-cip56-repay", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ party, amount: amount.toFixed(10), debtCid }),
+  });
+  const contentType = resp.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    const text = await resp.text().catch(() => "Unknown error");
+    return { success: false, mode: "native", httpStatus: resp.status, error: `HTTP ${resp.status}: ${text.slice(0, 300)}` };
+  }
+  const result = await resp.json();
+  if (!resp.ok || result.error) {
+    return { success: false, mode: "native", httpStatus: resp.status, error: result.error || `HTTP ${resp.status}` };
+  }
+  return result;
+}
+
+/**
+ * CIP-56 Native Stake — single atomic batch (Phase 4).
+ * Archives user's CIP-56 tokens + exercises StakeFromInventory
+ * in one transaction, eliminating the intermediate user-owned CantonMUSD step.
+ *
+ * Returns { success, mode: "native", stakeAmount, commandId }
+ * on success, or { success: false, error, mode: "native" } on failure.
+ * Callers should fall back to the hybrid flow (convertCip56ToRedeemable + Stake)
+ * if this fails with an infra error (5xx/409).
+ */
+export async function nativeCip56Stake(
+  party: string,
+  amount: number
+): Promise<{
+  success: boolean;
+  mode: string;
+  stakeAmount?: string;
+  commandId?: string;
+  error?: string;
+  httpStatus?: number;
+}> {
+  const resp = await fetch("/api/canton-cip56-stake", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ party, amount: amount.toFixed(10) }),
+  });
+  const contentType = resp.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    const text = await resp.text().catch(() => "Unknown error");
+    return { success: false, mode: "native", httpStatus: resp.status, error: `HTTP ${resp.status}: ${text.slice(0, 300)}` };
+  }
+  const result = await resp.json();
+  if (!resp.ok || result.error) {
+    return { success: false, mode: "native", httpStatus: resp.status, error: result.error || `HTTP ${resp.status}` };
+  }
+  return result;
+}
+
+/**
  * Create a DAML contract on Canton via server-side API route.
  */
 export async function cantonCreate(
