@@ -3,7 +3,7 @@ import { ethers } from "ethers";
 import { BLE_BRIDGE_V9_ABI } from "@/abis/BLEBridgeV9";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
-import { useCantonLedger, cantonExercise, fetchFreshBalances, convertCip56ToRedeemable, fetchBridgePreflight, fetchOpsHealth, type BridgePreflightData, type OpsHealthData } from "@/hooks/useCantonLedger";
+import { useCantonLedger, cantonExercise, fetchFreshBalances, convertCip56ToRedeemable, nativeCip56Redeem, fetchBridgePreflight, fetchOpsHealth, type BridgePreflightData, type OpsHealthData } from "@/hooks/useCantonLedger";
 import { useLoopWallet } from "@/hooks/useLoopWallet";
 import { CONTRACTS } from "@/lib/config";
 import { formatTimestamp, formatUSD } from "@/lib/format";
@@ -41,6 +41,8 @@ export function CantonBridge() {
     lastAttestation: 0n,
     paused: false,
   });
+
+  const [lastRedeemMode, setLastRedeemMode] = useState<"native" | "hybrid" | null>(null);
 
   const totalMusd = hasConnectedUserParty && data ? parseFloat(data.totalBalance) : 0;
   const redeemableMusd = preflight ? parseFloat(preflight.userRedeemableBalance) : totalMusd;
@@ -159,8 +161,33 @@ export function CantonBridge() {
 
     setTxStatus("bridging");
     setTxError(null);
+    setLastRedeemMode(null);
 
     try {
+      // ── CIP-56 NATIVE PATH (Phase 3) ──────────────────────────
+      // If user has CIP-56 tokens, try the native atomic redeem first.
+      // This eliminates the intermediate convert → merge → split → redeem steps.
+      if (needsConversion || (cip56Musd > 0 && parsedAmount <= cip56Musd)) {
+        console.log("[CantonBridge] Attempting CIP-56 native redeem...");
+        const nativeResult = await nativeCip56Redeem(activeParty, parsedAmount);
+
+        if (nativeResult.success) {
+          console.log("[CantonBridge] Native redeem succeeded:", nativeResult.commandId);
+          setLastRedeemMode("native");
+          setTxStatus("success");
+          setAmount("");
+          setTimeout(() => {
+            void handleRefresh();
+            setTxStatus("idle");
+          }, 4000);
+          return;
+        }
+
+        // Native failed — fall back to hybrid flow
+        console.warn("[CantonBridge] Native redeem failed, falling back to hybrid:", nativeResult.error);
+      }
+
+      // ── HYBRID FALLBACK PATH ───────────────────────────────────
       // Auto-convert CIP-56 → redeemable if user doesn't have enough legacy tokens
       if (needsConversion) {
         const convertNeeded = parsedAmount - redeemableMusd;
@@ -195,8 +222,6 @@ export function CantonBridge() {
       let selectedToken = freshTokens.find((t: any) => parseFloat(t.amount) >= parsedAmount);
 
       // Auto-consolidate fragmented redeemable tokens via CantonMUSD_Merge.
-      // If no single token covers the amount but aggregate does, repeatedly
-      // merge the two largest until one token is big enough (max 10 rounds).
       if (!selectedToken) {
         const totalRedeemable = freshTokens.reduce((s: number, t: any) => s + parseFloat(t.amount), 0);
         if (totalRedeemable < parsedAmount - 0.000001) {
@@ -295,6 +320,7 @@ export function CantonBridge() {
         throw new Error(redeemResp.error || "Redemption failed");
       }
 
+      setLastRedeemMode("hybrid");
       setTxStatus("success");
       setAmount("");
       setTimeout(() => {
@@ -491,8 +517,13 @@ export function CantonBridge() {
             )}
             {cip56Musd > 0 && (
               <div className="mt-2 rounded-lg bg-blue-500/10 border border-blue-500/20 px-3 py-2">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="inline-flex items-center rounded-full bg-blue-500/20 px-2 py-0.5 text-[10px] font-semibold text-blue-300 border border-blue-500/30">
+                    CIP-56 Native
+                  </span>
+                </div>
                 <p className="text-xs text-blue-300">
-                  CIP-56 is your primary mUSD balance. Redeem currently requires legacy CantonMUSD and auto-converts from CIP-56 when needed.
+                  CIP-56 tokens are redeemed directly via native atomic execution. No intermediate conversion needed.
                 </p>
               </div>
             )}
@@ -608,7 +639,18 @@ export function CantonBridge() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
                 <div className="flex-1">
-                  <p className="text-sm font-medium text-emerald-300">Redemption Submitted</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium text-emerald-300">Redemption Submitted</p>
+                    {lastRedeemMode && (
+                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                        lastRedeemMode === "native"
+                          ? "bg-blue-500/20 text-blue-300 border border-blue-500/30"
+                          : "bg-yellow-500/20 text-yellow-300 border border-yellow-500/30"
+                      }`}>
+                        {lastRedeemMode === "native" ? "CIP-56 Native" : "Compatibility"}
+                      </span>
+                    )}
+                  </div>
                   <p className="text-xs text-gray-400 mt-1">
                     Your Canton redemption request was created. The relay will settle it by minting mUSD on Ethereum.
                   </p>
@@ -643,12 +685,21 @@ export function CantonBridge() {
 
           <div className="rounded-xl bg-surface-800/50 border border-white/5 p-4 space-y-2">
             <p className="text-xs font-medium text-gray-400">How it works</p>
-            <ol className="text-xs text-gray-500 space-y-1 list-decimal list-inside">
-              <li>Your CantonMUSD is consumed by DirectMint_Redeem on Canton</li>
-              <li>A RedemptionRequest is created on the Canton ledger</li>
-              <li>The relay detects the request and mints mUSD on Ethereum</li>
-              <li>Typical completion time: 10&ndash;90 seconds</li>
-            </ol>
+            {cip56Musd > 0 ? (
+              <ol className="text-xs text-gray-500 space-y-1 list-decimal list-inside">
+                <li>CIP-56 tokens are atomically consumed and escrowed in a single transaction</li>
+                <li>DirectMint_RedeemFromInventory creates a RedemptionRequest on Canton</li>
+                <li>The relay detects the request and mints mUSD on Ethereum</li>
+                <li>Typical completion time: 10&ndash;90 seconds</li>
+              </ol>
+            ) : (
+              <ol className="text-xs text-gray-500 space-y-1 list-decimal list-inside">
+                <li>Your CantonMUSD is consumed by DirectMint_Redeem on Canton</li>
+                <li>A RedemptionRequest is created on the Canton ledger</li>
+                <li>The relay detects the request and mints mUSD on Ethereum</li>
+                <li>Typical completion time: 10&ndash;90 seconds</li>
+              </ol>
+            )}
           </div>
         </div>
       </div>

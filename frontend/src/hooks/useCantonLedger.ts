@@ -333,6 +333,45 @@ export async function convertCip56ToRedeemable(
 }
 
 /**
+ * CIP-56 Native Redeem — single atomic batch (Phase 3).
+ * Archives user's CIP-56 tokens + exercises DirectMint_RedeemFromInventory
+ * in one transaction, eliminating the intermediate user-owned CantonMUSD step.
+ *
+ * Returns { success, mode: "native", redeemAmount, feeEstimate, netAmount, commandId }
+ * on success, or { success: false, error, mode: "native" } on failure.
+ * Callers should fall back to the hybrid flow (convertCip56ToRedeemable + DirectMint_Redeem)
+ * if this fails.
+ */
+export async function nativeCip56Redeem(
+  party: string,
+  amount: number
+): Promise<{
+  success: boolean;
+  mode: string;
+  redeemAmount?: string;
+  feeEstimate?: string;
+  netAmount?: string;
+  commandId?: string;
+  error?: string;
+}> {
+  const resp = await fetch("/api/canton-cip56-redeem", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ party, amount: amount.toFixed(10) }),
+  });
+  const contentType = resp.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    const text = await resp.text().catch(() => "Unknown error");
+    return { success: false, mode: "native", error: `HTTP ${resp.status}: ${text.slice(0, 300)}` };
+  }
+  const result = await resp.json();
+  if (!resp.ok || result.error) {
+    return { success: false, mode: "native", error: result.error || `HTTP ${resp.status}` };
+  }
+  return result;
+}
+
+/**
  * Create a DAML contract on Canton via server-side API route.
  */
 export async function cantonCreate(
