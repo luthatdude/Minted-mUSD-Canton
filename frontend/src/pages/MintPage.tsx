@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { ethers } from "ethers";
 import { TxButton } from "@/components/TxButton";
-import { StatCard } from "@/components/StatCard";
 import { PageHeader } from "@/components/PageHeader";
 import { useTx } from "@/hooks/useTx";
-import { formatUSD, formatToken, formatBps } from "@/lib/format";
+import { formatToken, formatBps } from "@/lib/format";
 import { CONTRACTS, USDC_DECIMALS, MUSD_DECIMALS, CHAIN_ID } from "@/lib/config";
 import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import { useWCContracts } from "@/hooks/useWCContracts";
@@ -340,10 +339,6 @@ export function MintPage() {
   const activeMintDecimals = mintAsset === "USDC"
     ? USDC_DECIMALS
     : (selectedCollateralAsset?.decimals ?? 18);
-  const usdeAsset = collateralMintAssets.USDE;
-  const wethAsset = collateralMintAssets.WETH;
-  const wbtcAsset = collateralMintAssets.WBTC;
-
   if (!isConnected) {
     return (
       <div className="mx-auto max-w-6xl space-y-8">
@@ -354,7 +349,7 @@ export function MintPage() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl space-y-8">
+    <div className="mx-auto max-w-3xl space-y-8">
       <PageHeader
         title="Mint & Redeem"
         subtitle="Mint with USDC or collateral assets, and redeem mUSD to USDC"
@@ -367,53 +362,6 @@ export function MintPage() {
           {mintAsset} mints use the collateralized path (deposit + borrow).
         </div>
       )}
-
-      {/* Mintable Asset Balances (match Canton Mint layout) */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
-          label="Your USDC"
-          value={formatToken(stats.usdcBal, USDC_DECIMALS)}
-          color="blue"
-          icon={
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          }
-        />
-        <StatCard
-          label="Your USDE"
-          value={formatToken(usdeAsset?.balance ?? 0n, usdeAsset?.decimals ?? 18)}
-          color="purple"
-          subValue={usdeAsset ? (usdeAsset.enabled ? "Enabled collateral" : "Collateral disabled") : "Not enabled on vault"}
-          icon={
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 8h10M7 12h10M7 16h6" />
-            </svg>
-          }
-        />
-        <StatCard
-          label="Your WETH"
-          value={formatToken(wethAsset?.balance ?? 0n, wethAsset?.decimals ?? 18)}
-          color="yellow"
-          subValue={wethAsset ? (wethAsset.enabled ? "Enabled collateral" : "Collateral disabled") : "Not enabled on vault"}
-          icon={
-            <svg className="h-5 w-5" viewBox="0 0 320 512" fill="currentColor">
-              <path d="M311.9 260.8L160 353.6 8 260.8 160 0l151.9 260.8zM160 383.4L8 290.6 160 512l152-221.4-152 92.8z"/>
-            </svg>
-          }
-        />
-        <StatCard
-          label="Your WBTC"
-          value={formatToken(wbtcAsset?.balance ?? 0n, wbtcAsset?.decimals ?? 8)}
-          color="green"
-          subValue={wbtcAsset ? (wbtcAsset.enabled ? "Enabled collateral" : "Collateral disabled") : "Not enabled on vault"}
-          icon={
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4l7 4v8l-7 4-7-4V8l7-4z" />
-            </svg>
-          }
-        />
-      </div>
 
       {/* Action Card */}
       <div className="card-gradient-border overflow-hidden">
@@ -688,28 +636,6 @@ export function MintPage() {
             </div>
           </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <StatCard
-          label="Your mUSD"
-          value={formatToken(stats.musdBal)}
-          color="purple"
-          icon={
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
-            </svg>
-          }
-        />
-        <StatCard
-          label="Remaining Mintable"
-          value={formatUSD(stats.remaining)}
-          subValue={`Max: ${formatToken(stats.maxMint, 6)} per tx`}
-        />
-        <StatCard
-          label="Available for Redemption"
-          value={formatUSD(stats.available, 6)}
-          subValue={`Max: ${formatToken(stats.maxRedeem)} per tx`}
-        />
-      </div>
     </div>
   );
 }
