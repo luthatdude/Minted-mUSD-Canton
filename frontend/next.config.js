@@ -1,6 +1,10 @@
+const path = require('path');
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Pin tracing root to the frontend workspace to avoid lockfile-root ambiguity.
+  outputFileTracingRoot: path.resolve(__dirname),
 
   webpack: (config) => {
     // MetaMask SDK imports react-native modules that don't exist in web context
