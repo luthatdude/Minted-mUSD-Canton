@@ -1,5 +1,38 @@
 # Release Tracker
 
+## 2026-02-25 — Hybrid Fallback Decommission
+
+**Release:** Remove dead hybrid conversion code paths from CIP-56 components
+**PR:** [#161](https://github.com/luthatdude/Minted-mUSD-Canton/pull/161)
+**Depends on:** [#159](https://github.com/luthatdude/Minted-mUSD-Canton/pull/159), [#160](https://github.com/luthatdude/Minted-mUSD-Canton/pull/160)
+
+### Summary
+
+- Removed hybrid CIP-56→redeemable conversion branches from CantonBridge, CantonBorrow, CantonStake
+- Native CIP-56 failures surface directly (no silent fallback)
+- Marked `convertCip56ToRedeemable` as `@deprecated`
+- Preserved rollback path: `canton-convert.ts` endpoint and `fallback.ts` module retained
+
+### Validation
+
+| Gate | Result |
+|------|--------|
+| `tsc --noEmit` | PASS |
+| `tsc -p tsconfig.scripts.json` | PASS |
+| `npm run build` | PASS |
+| `ops:doctor` | 12/12 HEALTHY |
+| `ops:canary:native` | PASS (redeem succeeded) |
+| `ops:canary:force-conversion:no-fallback` | EXPECTED_BLOCKED_BY_POLICY (exit 0) |
+| Hybrid callsites in components | 0 matches |
+
+### Post-Merge Stability
+
+- [ ] T+1h `ops:check24h`
+- [ ] T+4h `ops:check24h`
+- [ ] T+24h `ops:check24h`
+
+---
+
 ## 2026-02-25 — CIP-56 Native-First Migration
 
 **Release:** CIP-56 native-first enforcement + hybrid fallback disabled
