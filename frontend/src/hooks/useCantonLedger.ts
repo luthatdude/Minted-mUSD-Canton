@@ -310,6 +310,10 @@ export async function fetchOpsHealth(party: string): Promise<OpsHealthData> {
 /**
  * Convert CIP-56 mUSD → redeemable CantonMUSD via server-side inventory swap.
  * Returns the conversion result or throws on failure.
+ *
+ * @deprecated Hybrid conversion is decommissioned. This function is retained
+ * for emergency rollback only. The /api/canton-convert endpoint gates with 403
+ * unless ENABLE_HYBRID_FALLBACK=true.
  */
 export async function convertCip56ToRedeemable(
   party: string,
@@ -339,8 +343,7 @@ export async function convertCip56ToRedeemable(
  *
  * Returns { success, mode: "native", redeemAmount, feeEstimate, netAmount, commandId }
  * on success, or { success: false, error, mode: "native" } on failure.
- * Callers should NOT fall back to hybrid unless NEXT_PUBLIC_ENABLE_HYBRID_FALLBACK=true.
- * Default behavior: native failure surfaces to the user.
+ * Native failure surfaces directly to the user (hybrid fallback decommissioned).
  */
 export async function nativeCip56Redeem(
   party: string,
@@ -380,8 +383,7 @@ export async function nativeCip56Redeem(
  *
  * Returns { success, mode: "native", repayAmount, commandId }
  * on success, or { success: false, error, mode: "native" } on failure.
- * Callers should NOT fall back to hybrid unless NEXT_PUBLIC_ENABLE_HYBRID_FALLBACK=true.
- * Default behavior: native failure surfaces to the user.
+ * Native failure surfaces directly to the user (hybrid fallback decommissioned).
  */
 export async function nativeCip56Repay(
   party: string,
@@ -419,8 +421,7 @@ export async function nativeCip56Repay(
  *
  * Returns { success, mode: "native", stakeAmount, commandId }
  * on success, or { success: false, error, mode: "native" } on failure.
- * Callers should NOT fall back to hybrid unless NEXT_PUBLIC_ENABLE_HYBRID_FALLBACK=true.
- * Default behavior: native failure surfaces to the user.
+ * Native failure surfaces directly to the user (hybrid fallback decommissioned).
  */
 export async function nativeCip56Stake(
   party: string,
