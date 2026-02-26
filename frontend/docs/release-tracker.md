@@ -4,6 +4,8 @@
 
 **Release:** Remove dead hybrid conversion code paths from CIP-56 components
 **PR:** [#161](https://github.com/luthatdude/Minted-mUSD-Canton/pull/161)
+**Merge commit:** [`d3659288`](https://github.com/luthatdude/Minted-mUSD-Canton/commit/d3659288)
+**Tag:** [`cip56-migration-complete-2026-02-25`](https://github.com/luthatdude/Minted-mUSD-Canton/releases/tag/cip56-migration-complete-2026-02-25)
 **Depends on:** [#159](https://github.com/luthatdude/Minted-mUSD-Canton/pull/159), [#160](https://github.com/luthatdude/Minted-mUSD-Canton/pull/160)
 
 ### Summary
