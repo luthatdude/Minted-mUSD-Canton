@@ -42,7 +42,7 @@ const TIER_LABELS: Record<LockTier, string> = {
 
 const POOL_TAB_CONFIG = [
   { key: "smusd" as PoolTab, label: "smUSD", badge: "ERC-4626", color: "from-emerald-500 to-teal-500" },
-  { key: "ethpool" as PoolTab, label: "ETH Pool", badge: "smUSD-E", color: "from-blue-500 to-indigo-500" },
+  { key: "ethpool" as PoolTab, label: "Deltra Neutral", badge: "smUSD-E", color: "from-blue-500 to-indigo-500" },
 ];
 
 // ─── Component ──────────────────────────────────────────────────────────────
@@ -67,7 +67,7 @@ export function StakePage() {
     canWithdraw: false, cooldownRemaining: 0n, previewDeposit: 0n, previewRedeem: 0n,
   });
 
-  // ETH Pool state
+  // ETH Deltra Neutral Staking state
   const [ethPoolStats, setEthPoolStats] = useState({
     sharePrice: 0n, totalETH: 0n, totalStable: 0n, totalMUSD: 0n,
     totalShares: 0n, poolCap: 0n, smUsdEBal: 0n, ethBal: 0n, usdcBal: 0n, usdtBal: 0n,
@@ -120,7 +120,7 @@ export function StakePage() {
   }, [smusd, amount, tab, pool]);
 
   // ═══════════════════════════════════════════════════════════════════════════
-  //  ETH Pool Data
+  //  ETH Deltra Neutral Staking Data
   // ═══════════════════════════════════════════════════════════════════════════
   useEffect(() => {
     if (pool !== "ethpool") return;
@@ -137,7 +137,7 @@ export function StakePage() {
         const usdcBal = usdc ? await usdc.balanceOf(address) : 0n;
         const usdtBal = usdt ? await usdt.balanceOf(address) : 0n;
         setEthPoolStats({ sharePrice, totalETH, totalStable, totalMUSD, totalShares, poolCap, smUsdEBal, ethBal, usdcBal, usdtBal });
-      } catch (err) { console.error("ETH Pool load error:", err); }
+      } catch (err) { console.error("ETH Deltra Neutral Staking load error:", err); }
     }
     load();
   }, [ethPool, smusde, usdc, usdt, address, provider, pool, tx.success]);
@@ -187,7 +187,7 @@ export function StakePage() {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  //  Handlers: ETH Pool
+  //  Handlers: ETH Deltra Neutral Staking
   // ═══════════════════════════════════════════════════════════════════════════
   async function handleEthPoolStake() {
     if (!ethPool || !address) return;
@@ -612,7 +612,7 @@ export function StakePage() {
                   >
                     <span className="relative z-10 flex items-center justify-center gap-2">
                       <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" /></svg>
-                      Deposit
+                      Stake mUSD
                     </span>
                     {tab === "stake" && <span className="absolute bottom-0 left-1/2 h-0.5 w-24 -translate-x-1/2 rounded-full bg-gradient-to-r from-blue-500 to-indigo-500" />}
                   </button>
@@ -622,7 +622,7 @@ export function StakePage() {
                   >
                     <span className="relative z-10 flex items-center justify-center gap-2">
                       <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                      Unstake
+                      Unstake mUSD
                     </span>
                     {tab === "unstake" && <span className="absolute bottom-0 left-1/2 h-0.5 w-24 -translate-x-1/2 rounded-full bg-gradient-to-r from-blue-500 to-indigo-500" />}
                   </button>
@@ -633,7 +633,7 @@ export function StakePage() {
                     <>
                       {/* Asset Selector */}
                       <div className="space-y-3">
-                        <label className="text-sm font-medium text-gray-400">Deposit Asset</label>
+                        <label className="text-sm font-medium text-gray-400">Deposit</label>
                         <div className="grid grid-cols-3 gap-2">
                           {(["ETH", "USDC", "USDT"] as DepositAsset[]).map(asset => (
                             <button
@@ -744,7 +744,7 @@ export function StakePage() {
                       >
                         <span className="flex items-center justify-center gap-2">
                           <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                          Deposit {depositAsset} → smUSD-E
+                          Stake mUSD → smUSD-E
                         </span>
                       </TxButton>
                     </>
@@ -764,7 +764,7 @@ export function StakePage() {
                       ) : (
                         <div className="space-y-3">
                           <div className="rounded-lg border border-blue-500/20 bg-blue-500/10 px-3 py-2 text-xs text-blue-300">
-                            ETH Pool is position-based. Each deposit creates its own position, so unstaking is done per position.
+                            ETH Deltra Neutral Staking is position-based. Each deposit creates its own position, so unstaking is done per position.
                           </div>
                           <label className="text-sm font-medium text-gray-400">Select Position to Unstake</label>
                           {positions.map(pos => {
@@ -890,9 +890,9 @@ export function StakePage() {
                     <svg className="h-5 w-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
                   </div>
                   <div>
-                    <h3 className="font-semibold text-white mb-1">ETH Pool — Fluid Strategy Yield</h3>
+                    <h3 className="font-semibold text-white mb-1">ETH Deltra Neutral Staking</h3>
                     <p className="text-sm text-gray-400">
-                      Deposit ETH, USDC, or USDT into the ETH Pool. Your deposit mints mUSD and you receive smUSD-E shares
+                      Deposit mUSD into the ETH Deltra Neutral Staking to earn strategy yield. Receive smUSD-E shares
                       with optional time-lock boost multipliers (up to 2×). Yield is generated via Fluid leveraged loop strategies.
                     </p>
                     <p className="text-sm text-blue-400 mt-2 font-medium">
@@ -904,19 +904,19 @@ export function StakePage() {
             </div>
           </div>
 
-          {/* How ETH Pool Works */}
+          {/* How ETH Deltra Neutral Staking Works */}
           <div className="card">
             <div className="flex items-center gap-3 mb-5">
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-500/20">
                 <svg className="h-5 w-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
               </div>
-              <h2 className="text-lg font-semibold text-white">How ETH Pool Works</h2>
+              <h2 className="text-lg font-semibold text-white">How ETH Deltra Neutral Staking Works</h2>
             </div>
             <div className="grid gap-4 sm:grid-cols-4">
               <div className="rounded-xl bg-surface-800/50 p-4 border border-white/5">
                 <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-500/20 text-blue-400 font-bold text-sm mb-3">1</div>
-                <h3 className="font-medium text-white mb-1">Deposit Assets</h3>
-                <p className="text-sm text-gray-400">Deposit ETH, USDC, or USDT. Your deposit is converted to mUSD at oracle price.</p>
+                <h3 className="font-medium text-white mb-1">Deposit mUSD</h3>
+                <p className="text-sm text-gray-400">Deposit mUSD into the ETH Deltra Neutral Staking.</p>
               </div>
               <div className="rounded-xl bg-surface-800/50 p-4 border border-white/5">
                 <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-500/20 text-indigo-400 font-bold text-sm mb-3">2</div>

@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import { useLoopWallet } from "@/hooks/useLoopWallet";
 import {
   useCantonLedger,
@@ -44,21 +44,21 @@ const CANTON_ASSETS: { key: FaucetAsset; label: string; description: string; def
   {
     key: "CTN",
     label: "Canton Coin (CTN)",
-    description: "CantonCoin for Boost Pool deposits and ETH Pool staking",
+    description: "CantonCoin for Boost Pool deposits and Deltra Neutral Staking staking",
     defaultAmount: "50",
     gradient: "from-yellow-400 to-orange-500",
   },
   {
     key: "USDC",
     label: "Canton USDC",
-    description: "CantonUSDC for ETH Pool deposits",
+    description: "CantonUSDC for Deltra Neutral Staking deposits",
     defaultAmount: "100",
     gradient: "from-blue-500 to-cyan-500",
   },
   {
     key: "USDCx",
     label: "Canton USDCx",
-    description: "USDCx (bridged USDC variant) for ETH Pool deposits",
+    description: "USDCx (bridged USDC variant) for Deltra Neutral Staking deposits",
     defaultAmount: "100",
     gradient: "from-teal-500 to-emerald-500",
   },
@@ -82,9 +82,54 @@ export function DevnetFaucetPanel() {
     USDCx: "100",
   });
   const [states, setStates] = useState<Record<string, FaucetState>>({});
+  const [cooldowns, setCooldowns] = useState<Record<string, number>>({});
+
+  // Tick cooldown counters every second
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCooldowns((prev) => {
+        const next = { ...prev };
+        let changed = false;
+        for (const key of Object.keys(next)) {
+          if (next[key] > 0) { next[key] = Math.max(0, next[key] - 1); changed = true; }
+        }
+        return changed ? next : prev;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  function startCooldown(asset: string, nextAllowedAt: string | null) {
+    if (!nextAllowedAt) return;
+    const remaining = Math.max(0, Math.ceil((new Date(nextAllowedAt).getTime() - Date.now()) / 1000));
+    if (remaining > 0) setCooldowns((c) => ({ ...c, [asset]: remaining }));
+  }
 
   // Feature flag check (client-side, server enforces independently)
   const clientEnabled = process.env.NEXT_PUBLIC_ENABLE_DEVNET_FAUCET === "true";
+
+  function classifyError(errorType: string | null, errorMsg: string): { label: string; guidance: string; severity: "warn" | "error" } {
+    switch (errorType) {
+      case "DISABLED":
+        return { label: "Faucet Disabled", guidance: "Set ENABLE_DEVNET_FAUCET=true in .env.local and restart the frontend.", severity: "error" };
+      case "NOT_ALLOWLISTED":
+        return { label: "Not Allowlisted", guidance: "Add this party to DEVNET_FAUCET_ALLOWLIST in .env.local and restart.", severity: "error" };
+      case "RATE_LIMITED":
+        return { label: "Rate Limited", guidance: "Wait for cooldown to expire before retrying.", severity: "warn" };
+      case "INSUFFICIENT_OPERATOR_INVENTORY":
+        return { label: "Low Inventory", guidance: "Run `npm run ops:topup` to restore operator mUSD inventory.", severity: "error" };
+      case "UPSTREAM_ERROR":
+        if (errorMsg.includes("UNKNOWN_SUBMITTERS"))
+          return { label: "Non-Local Party", guidance: "Connected party is not local on this participant. Use a local party or configure an alias override in NEXT_PUBLIC_CANTON_PARTY_ALIASES_JSON.", severity: "error" };
+        if (errorMsg.includes("CONTRACT_NOT_FOUND"))
+          return { label: "Stale Contract", guidance: "Operator inventory CID changed on-ledger. Try again — the system will re-fetch.", severity: "warn" };
+        return { label: "Canton Error", guidance: "Check Canton logs and retry.", severity: "error" };
+      case "NETWORK_ERROR":
+        return { label: "Network Error", guidance: "Check that the frontend and Canton are running.", severity: "error" };
+      default:
+        return { label: "Error", guidance: "", severity: "error" };
+    }
+  }
 
   const handleMint = useCallback(async (asset: FaucetAsset) => {
     if (!activeParty) return;
@@ -110,10 +155,18 @@ export function DevnetFaucetPanel() {
         body: JSON.stringify(body),
       });
 
+      // Handle non-JSON responses (Next.js error pages returning HTML)
+      const contentType = resp.headers.get("content-type") || "";
+      if (!contentType.includes("application/json")) {
+        const text = await resp.text().catch(() => "Unknown error");
+        throw new Error(`HTTP ${resp.status}: ${text.slice(0, 200)}`);
+      }
+
       const data = await resp.json();
 
       if (data.success) {
         const label = isMuSD ? "Funded" : "Minted";
+        startCooldown(asset, data.nextAllowedAt);
         setStates((s) => ({
           ...s,
           [asset]: {
@@ -133,6 +186,7 @@ export function DevnetFaucetPanel() {
           try { await fetchBridgePreflight(activeParty); } catch { /* non-critical */ }
         }
       } else {
+        if (data.errorType === "RATE_LIMITED") startCooldown(asset, data.nextAllowedAt);
         setStates((s) => ({
           ...s,
           [asset]: {
@@ -182,6 +236,9 @@ export function DevnetFaucetPanel() {
       {/* Asset faucet cards */}
       {CANTON_ASSETS.map((asset) => {
         const state = states[asset.key] || { loading: false, success: null, error: null, errorType: null, remainingDailyCap: null, nextAllowedAt: null, inventoryAvailable: null, inventoryRemaining: null };
+        const cooldownRemaining = cooldowns[asset.key] || 0;
+        const isOnCooldown = cooldownRemaining > 0;
+        const classified = state.error ? classifyError(state.errorType, state.error) : null;
 
         return (
           <div key={asset.key} className="rounded-xl border border-white/10 bg-surface-800/50 p-5">
@@ -215,7 +272,7 @@ export function DevnetFaucetPanel() {
               </div>
               <button
                 onClick={() => handleMint(asset.key)}
-                disabled={state.loading || !amounts[asset.key] || parseFloat(amounts[asset.key] || "0") <= 0}
+                disabled={state.loading || isOnCooldown || !amounts[asset.key] || parseFloat(amounts[asset.key] || "0") <= 0}
                 className={`flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r ${asset.gradient} px-5 py-2.5 text-sm font-medium text-white transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50`}
               >
                 {state.loading ? (
@@ -223,6 +280,8 @@ export function DevnetFaucetPanel() {
                     <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
                     {asset.key === "mUSD" ? "Funding..." : "Minting..."}
                   </>
+                ) : isOnCooldown ? (
+                  <>Cooldown {cooldownRemaining}s</>
                 ) : (
                   <>{asset.key === "mUSD" ? "Fund" : "Mint"} {asset.key}</>
                 )}
@@ -235,7 +294,7 @@ export function DevnetFaucetPanel() {
                 {state.remainingDailyCap && (
                   <span>Daily cap remaining: {fmtAmount(state.remainingDailyCap)}</span>
                 )}
-                {state.nextAllowedAt && (
+                {state.nextAllowedAt && !isOnCooldown && (
                   <span>Next allowed: {new Date(state.nextAllowedAt).toLocaleTimeString()}</span>
                 )}
                 {state.inventoryRemaining && (
@@ -251,11 +310,16 @@ export function DevnetFaucetPanel() {
               </div>
             )}
 
-            {/* Error message */}
-            {state.error && (
-              <div className="mt-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
-                <span className="font-medium">{state.errorType ? `[${state.errorType}] ` : ""}</span>
+            {/* Error message with classified guidance */}
+            {state.error && classified && (
+              <div className={`mt-2 rounded-lg border px-3 py-2 text-sm ${classified.severity === "warn" ? "border-amber-500/30 bg-amber-500/10 text-amber-400" : "border-red-500/30 bg-red-500/10 text-red-400"}`}>
+                <span className="font-medium">[{classified.label}] </span>
                 {state.error}
+                {classified.guidance && (
+                  <span className={`block mt-1 text-xs ${classified.severity === "warn" ? "text-amber-400/70" : "text-red-400/70"}`}>
+                    {classified.guidance}
+                  </span>
+                )}
                 {state.errorType === "INSUFFICIENT_OPERATOR_INVENTORY" && state.inventoryAvailable && (
                   <span className="block mt-1 text-xs text-red-400/70">
                     Available operator inventory: {fmtAmount(state.inventoryAvailable)} mUSD

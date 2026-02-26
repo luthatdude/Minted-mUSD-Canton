@@ -43,7 +43,7 @@ const FAUCET_TOKENS: TokenFaucet[] = [
     key: "usdt",
     label: "Mock USDT",
     symbol: "USDT",
-    description: "Testnet USDT — mint freely for ETH Pool deposits and testing",
+    description: "Testnet USDT — mint freely for Deltra Neutral Staking deposits and testing",
     address: CONTRACTS.USDT,
     decimals: 6,
     defaultAmount: "10000",

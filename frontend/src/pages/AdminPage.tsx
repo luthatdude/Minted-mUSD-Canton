@@ -275,6 +275,7 @@ export function AdminPage() {
   // Current values + data-loading state (H-04)
   const [currentValues, setCurrentValues] = useState<Record<string, string>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [vaultLoadError, setVaultLoadError] = useState<string | null>(null);
   const [faucetStatus, setFaucetStatus] = useState<{ success?: string; error?: string }>({});
   const [faucetLoadingKey, setFaucetLoadingKey] = useState<string | null>(null);
   const [cantonUsdcAmount, setCantonUsdcAmount] = useState("10000");
@@ -293,8 +294,19 @@ export function AdminPage() {
       if (!address) return;
       setLoadError(null);
       const vals: Record<string, string> = {};
-      try {
+      const failedEndpoints: string[] = [];
+
+      async function tryLoad(label: string, fn: () => Promise<void>) {
+        try { await fn(); } catch (err) {
+          console.error(`[AdminPage] ${label} load failed:`, err);
+          failedEndpoints.push(label);
+        }
+      }
+
+      await tryLoad("mUSD", async () => {
         if (musd) vals.supplyCap = formatUSD(await musd.supplyCap());
+      });
+      await tryLoad("DirectMint", async () => {
         if (directMint) {
           vals.mintFee = formatBps(await directMint.mintFeeBps());
           vals.redeemFee = formatBps(await directMint.redeemFeeBps());
@@ -307,46 +319,49 @@ export function AdminPage() {
           vals.accFees = formatToken(accumulatedFeesRaw, 6);
           vals.paused = (await directMint.paused()).toString();
         }
+      });
+      await tryLoad("Treasury", async () => {
         if (treasury) {
-          // Use TreasuryV2 functions instead of stale V1 calls
           vals.maxDeploy = formatBps(await treasury.reserveBps());
           vals.totalBacking = formatUSD(await treasury.totalValue(), 6);
           vals.reserveBalance = formatUSD(await treasury.reserveBalance(), 6);
         }
+      });
+      await tryLoad("Bridge", async () => {
         if (bridge) {
           vals.bridgeMinSigs = (await bridge.minSignatures()).toString();
           vals.bridgeRatio = formatBps(await bridge.collateralRatioBps());
           vals.bridgePaused = (await bridge.paused()).toString();
         }
+      });
+      await tryLoad("Borrow", async () => {
         if (borrow) {
           vals.interestRate = formatBps(await borrow.interestRateBps());
           vals.minDebt = formatUSD(await borrow.minDebt());
         }
-        // Global Pause status
+      });
+      await tryLoad("GlobalPause", async () => {
         if (globalPause && address) {
-          try {
-            const paused = await globalPause.isGloballyPaused();
-            const lastPausedAtRaw = await globalPause.lastPausedAt();
-            const lastUnpausedAtRaw = await globalPause.lastUnpausedAt();
-            const GUARDIAN_ROLE = await globalPause.GUARDIAN_ROLE();
-            const ADMIN_ROLE = await globalPause.DEFAULT_ADMIN_ROLE();
-            const isGuardian = await globalPause.hasRole(GUARDIAN_ROLE, address);
-            const isAdmin = await globalPause.hasRole(ADMIN_ROLE, address);
-            const fmtTs = (ts: bigint) => ts > 0n ? new Date(Number(ts) * 1000).toLocaleString() : "Never";
-            if (!cancelled) setGlobalPauseStatus({
-              paused,
-              lastPausedAt: fmtTs(lastPausedAtRaw),
-              lastUnpausedAt: fmtTs(lastUnpausedAtRaw),
-              isGuardian,
-              isAdmin,
-            });
-          } catch (err) {
-            console.error("[AdminPage] GlobalPause load failed:", err);
-          }
+          const paused = await globalPause.isGloballyPaused();
+          const lastPausedAtRaw = await globalPause.lastPausedAt();
+          const lastUnpausedAtRaw = await globalPause.lastUnpausedAt();
+          const GUARDIAN_ROLE = await globalPause.GUARDIAN_ROLE();
+          const ADMIN_ROLE = await globalPause.DEFAULT_ADMIN_ROLE();
+          const isGuardian = await globalPause.hasRole(GUARDIAN_ROLE, address);
+          const isAdmin = await globalPause.hasRole(ADMIN_ROLE, address);
+          const fmtTs = (ts: bigint) => ts > 0n ? new Date(Number(ts) * 1000).toLocaleString() : "Never";
+          if (!cancelled) setGlobalPauseStatus({
+            paused,
+            lastPausedAt: fmtTs(lastPausedAtRaw),
+            lastUnpausedAt: fmtTs(lastUnpausedAtRaw),
+            isGuardian,
+            isAdmin,
+          });
         }
-      } catch (err) {
-        console.error("[AdminPage] Failed to load protocol data:", err);
-        if (!cancelled) setLoadError("Failed to load protocol data. Check RPC connection.");
+      });
+
+      if (!cancelled && failedEndpoints.length > 0) {
+        setLoadError(`Failed to load: ${failedEndpoints.join(", ")}. Check RPC connection.`);
       }
       if (!cancelled) setCurrentValues(vals);
     }
@@ -360,6 +375,7 @@ export function AdminPage() {
     async function loadVaultData() {
       const vaults: Record<string, VaultViewData> = {};
       const mvContracts: Record<string, any> = { vault1: metaVault1, vault2: metaVault2, vault3: metaVault3 };
+      const failedVaults: string[] = [];
 
       for (const { key } of VAULT_CONTRACTS_MAP) {
         const mv = mvContracts[key];
@@ -400,9 +416,13 @@ export function AdminPage() {
           };
         } catch (err) {
           console.error(`[AdminPage] Failed to load ${key} data:`, err);
+          failedVaults.push(key);
         }
       }
-      if (!cancelled) setVaultData(vaults);
+      if (!cancelled) {
+        setVaultData(vaults);
+        setVaultLoadError(failedVaults.length > 0 ? `Failed to load vaults: ${failedVaults.join(", ")}.` : null);
+      }
     }
     loadVaultData();
     return () => { cancelled = true; };
@@ -659,9 +679,10 @@ export function AdminPage() {
           Transaction confirmed!
         </div>
       )}
-      {loadError && (
-        <div className="rounded-lg border border-amber-800 bg-amber-900/20 p-4 text-sm text-amber-400">
-          ⚠️ {loadError}
+      {(loadError || vaultLoadError) && (
+        <div className="rounded-lg border border-amber-800 bg-amber-900/20 p-4 text-sm text-amber-400 space-y-1">
+          {loadError && <div>⚠️ {loadError}</div>}
+          {vaultLoadError && <div>⚠️ {vaultLoadError}</div>}
         </div>
       )}
 

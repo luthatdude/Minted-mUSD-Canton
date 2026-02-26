@@ -1,7 +1,16 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  
+
+  webpack: (config) => {
+    // MetaMask SDK imports react-native modules that don't exist in web context
+    config.resolve.fallback = {
+      ...config.resolve.fallback,
+      '@react-native-async-storage/async-storage': false,
+    };
+    return config;
+  },
+
   // Security headers — CSP is now set dynamically per-request in _document.tsx
   // with a unique nonce (FE-H-03 remediation). Only non-CSP headers remain here.
   async headers() {
