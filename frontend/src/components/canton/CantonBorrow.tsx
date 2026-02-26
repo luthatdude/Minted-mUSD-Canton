@@ -9,14 +9,12 @@ import {
   cantonExercise,
   fetchFreshBalances,
   refreshPriceFeeds,
-  convertCip56ToRedeemable,
   fetchBridgePreflight,
   nativeCip56Repay,
   type CantonBalancesData,
   type EscrowInfo,
   type SimpleToken,
 } from "@/hooks/useCantonLedger";
-import { HYBRID_FALLBACK_ENABLED } from "@/lib/api-hardening/fallback";
 import { useLoopWallet } from "@/hooks/useLoopWallet";
 
 type ActionTab = "deposit" | "borrow" | "repay" | "withdraw";
@@ -399,8 +397,8 @@ export function CantonBorrow() {
           throw new Error("Selected debt is already settled.");
         }
 
-        // ── CIP-56 NATIVE PATH (Phase 4) ──────────────────────────
-        // Try the native atomic repay first. Falls back to hybrid on infra errors only.
+        // ── CIP-56 NATIVE PATH ──────────────────────────
+        // Try the native atomic repay first.
         const preflight = await fetchBridgePreflight(activeParty).catch(() => null);
         const cip56Available = preflight ? parseFloat(preflight.userCip56Balance) : 0;
         if (cip56Available >= targetRepayAmount - 0.000001) {
@@ -412,35 +410,12 @@ export function CantonBorrow() {
             setAmount(""); refresh();
             return;
           }
-          // Infra errors (409 inventory / 5xx) fall through to hybrid only when explicitly enabled
-          const status = nativeResult.httpStatus ?? 0;
-          if ((status === 409 || (status >= 500 && status < 600)) && HYBRID_FALLBACK_ENABLED) {
-            console.warn("[CantonBorrow] Native repay infra error, falling back to hybrid:", nativeResult.error);
-          } else {
-            throw new Error(nativeResult.error || "Native CIP-56 repay failed. Hybrid fallback is disabled.");
-          }
+          // Native failed — surface error to user (hybrid fallback decommissioned)
+          throw new Error(nativeResult.error || "Native CIP-56 repay failed");
         }
 
-        // ── HYBRID FALLBACK PATH (emergency only, requires NEXT_PUBLIC_ENABLE_HYBRID_FALLBACK=true) ──
-        // Auto-convert CIP-56 → CantonMUSD if needed for repayment
-        let repayTokens = fresh.tokens || [];
-        const redeemableTotal = repayTokens.reduce((s, t) => s + parseFloat(t.amount || "0"), 0);
-        if (redeemableTotal < targetRepayAmount - 0.000001) {
-          try {
-            const pf = await fetchBridgePreflight(activeParty);
-            const cip56Available = parseFloat(pf.userCip56Balance);
-            if (cip56Available > 0) {
-              const convertNeeded = Math.min(targetRepayAmount - redeemableTotal, cip56Available);
-              const convResult = await convertCip56ToRedeemable(activeParty, convertNeeded);
-              if (convResult.success) {
-                const refreshed = await fetchFreshBalances(activeParty);
-                repayTokens = refreshed.tokens || [];
-              }
-            }
-          } catch (convErr) {
-            console.warn("[CantonBorrow] CIP-56 auto-conversion for repay failed:", convErr);
-          }
-        }
+        // ── STANDARD REDEEMABLE PATH ──────────────────────────
+        const repayTokens = fresh.tokens || [];
 
         const selectedMusd = pickContractForAmount(repayTokens, targetRepayAmount);
         if (!selectedMusd) {

@@ -3,8 +3,7 @@ import { ethers } from "ethers";
 import { BLE_BRIDGE_V9_ABI } from "@/abis/BLEBridgeV9";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
-import { useCantonLedger, cantonExercise, fetchFreshBalances, convertCip56ToRedeemable, nativeCip56Redeem, fetchBridgePreflight, fetchOpsHealth, type BridgePreflightData, type OpsHealthData } from "@/hooks/useCantonLedger";
-import { HYBRID_FALLBACK_ENABLED } from "@/lib/api-hardening/fallback";
+import { useCantonLedger, cantonExercise, fetchFreshBalances, nativeCip56Redeem, fetchBridgePreflight, fetchOpsHealth, type BridgePreflightData, type OpsHealthData } from "@/hooks/useCantonLedger";
 import { useLoopWallet } from "@/hooks/useLoopWallet";
 import { CONTRACTS } from "@/lib/config";
 import { formatTimestamp, formatUSD } from "@/lib/format";
@@ -42,8 +41,6 @@ export function CantonBridge() {
     lastAttestation: 0n,
     paused: false,
   });
-
-  const [lastRedeemMode, setLastRedeemMode] = useState<"native" | "hybrid" | null>(null);
 
   const totalMusd = hasConnectedUserParty && data ? parseFloat(data.totalBalance) : 0;
   const redeemableMusd = preflight ? parseFloat(preflight.userRedeemableBalance) : totalMusd;
@@ -162,7 +159,6 @@ export function CantonBridge() {
 
     setTxStatus("bridging");
     setTxError(null);
-    setLastRedeemMode(null);
 
     try {
       // ── CIP-56 NATIVE PATH (Phase 3) ──────────────────────────
@@ -174,7 +170,6 @@ export function CantonBridge() {
 
         if (nativeResult.success) {
           console.log("[CantonBridge] Native redeem succeeded:", nativeResult.commandId);
-          setLastRedeemMode("native");
           setTxStatus("success");
           setAmount("");
           setTimeout(() => {
@@ -184,38 +179,11 @@ export function CantonBridge() {
           return;
         }
 
-        // Native failed — classify the error before deciding whether to fall back.
-        // Business errors (400: blacklisted, paused, insufficient balance, below min)
-        // should surface immediately. Only infra errors (502/5xx, 409 inventory)
-        // warrant falling back to the hybrid flow when explicitly enabled.
-        const status = nativeResult.httpStatus ?? 0;
-        const isBizError = status === 400 || status === 404;
-        if (isBizError) {
-          throw new Error(nativeResult.error || "Redeem rejected");
-        }
-        if (!HYBRID_FALLBACK_ENABLED) {
-          throw new Error(nativeResult.error || "Native CIP-56 redeem failed. Hybrid fallback is disabled.");
-        }
-        console.warn("[CantonBridge] Native redeem infra error, falling back to hybrid:", nativeResult.error);
+        // Native failed — surface error to user (hybrid fallback decommissioned)
+        throw new Error(nativeResult.error || "Native CIP-56 redeem failed");
       }
 
-      // ── HYBRID FALLBACK PATH (emergency only, requires NEXT_PUBLIC_ENABLE_HYBRID_FALLBACK=true) ──
-      // Auto-convert CIP-56 → redeemable if user doesn't have enough legacy tokens
-      if (needsConversion) {
-        const convertNeeded = parsedAmount - redeemableMusd;
-        const convResult = await convertCip56ToRedeemable(activeParty, convertNeeded);
-        if (!convResult.success) {
-          const rawErr = convResult.error || "";
-          if (rawErr.includes("Insufficient operator inventory") || rawErr.includes("inventoryAvailable")) {
-            const match = rawErr.match(/have ([\d.]+) redeemable, need ([\d.]+)/);
-            const available = match ? match[1] : "0";
-            const needed = match ? match[2] : convertNeeded.toFixed(2);
-            throw new Error(`Conversion inventory low: only ${available} redeemable mUSD available, need ${needed}. Try a smaller amount or wait for inventory replenishment.`);
-          }
-          throw new Error(`Auto-conversion failed: ${rawErr}`);
-        }
-      }
-
+      // ── STANDARD REDEEMABLE PATH ──────────────────────────
       const fresh = await fetchFreshBalances(activeParty);
       const freshTokens = fresh.tokens || [];
       const operatorSnapshot = await fetchFreshBalances(null);
@@ -332,7 +300,6 @@ export function CantonBridge() {
         throw new Error(redeemResp.error || "Redemption failed");
       }
 
-      setLastRedeemMode("hybrid");
       setTxStatus("success");
       setAmount("");
       setTimeout(() => {
@@ -660,15 +627,6 @@ export function CantonBridge() {
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
                     <p className="text-sm font-medium text-emerald-300">Redemption Submitted</p>
-                    {lastRedeemMode && (
-                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                        lastRedeemMode === "native"
-                          ? "bg-blue-500/20 text-blue-300 border border-blue-500/30"
-                          : "bg-yellow-500/20 text-yellow-300 border border-yellow-500/30"
-                      }`}>
-                        {lastRedeemMode === "native" ? "CIP-56 Native" : "Compatibility"}
-                      </span>
-                    )}
                   </div>
                   <p className="text-xs text-gray-400 mt-1">
                     Your Canton redemption request was created. The relay will settle it by minting mUSD on Ethereum.
