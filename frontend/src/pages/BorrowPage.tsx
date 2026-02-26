@@ -55,6 +55,7 @@ export function BorrowPage() {
         const tokens: string[] = await vault.getSupportedTokens();
         const infos: CollateralInfo[] = [];
 
+        let anyPriceMissing = false;
         for (const token of tokens) {
           const erc20 = new ethers.Contract(token, ERC20_ABI, signer);
           const [symbol, dec, dep, bal, prc, config] = await Promise.all([
@@ -62,7 +63,7 @@ export function BorrowPage() {
             erc20.decimals(),
             vault.getDeposit(address, token),
             erc20.balanceOf(address),
-            oracle.getPrice(token).catch(() => 0n),
+            oracle.getPrice(token).catch(() => { anyPriceMissing = true; return 0n; }),
             vault.getConfig(token),
           ]);
           const decimals = Number(dec);
@@ -80,7 +81,7 @@ export function BorrowPage() {
             deposited,
             price,
             valueUsd,
-            usedFallbackPrice: false,
+            usedFallbackPrice: price === 0n,
             // getConfig returns (enabled, factorBps, liqThreshold, liqPenalty)
             // Previously mapped [0]→factor, [1]→threshold, [2]→penalty (off-by-one, skipping enabled)
             factorBps: config[1],
@@ -89,6 +90,7 @@ export function BorrowPage() {
           });
         }
         setCollaterals(infos);
+        setOracleDegraded(anyPriceMissing);
         if (tokens.length > 0 && !selectedToken) setSelectedToken(tokens[0]);
 
         const [d, hf, mb, ir, bal] = await Promise.all([
@@ -314,6 +316,19 @@ export function BorrowPage() {
           </svg>
           <span className="text-sm">
             <span className="font-semibold">Caution:</span> Health factor is low ({hfValue.toFixed(2)}). Add collateral or repay debt to avoid liquidation.
+          </span>
+        </div>
+      )}
+
+      {/* Oracle Degraded Warning */}
+      {oracleDegraded && (
+        <div className="alert-warning flex items-center gap-3">
+          <svg className="h-5 w-5 flex-shrink-0 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+          <span className="text-sm">
+            <span className="font-semibold">Oracle degraded:</span> One or more collateral price feeds returned zero. Displayed values may be inaccurate.
+            <button onClick={() => setReloadKey(k => k + 1)} className="ml-2 underline text-yellow-300 hover:text-yellow-200">Refresh prices</button>
           </span>
         </div>
       )}

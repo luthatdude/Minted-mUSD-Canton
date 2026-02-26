@@ -7,10 +7,13 @@ import {
   getCantonUser,
   getPackageId,
   validateConfig,
-  CANTON_PARTY_PATTERN,
   PKG_ID_PATTERN,
   guardMethod,
 } from "@/lib/api-hardening";
+import {
+  resolveRequestedParty as resolvePartyViaSharedResolver,
+  CANTON_PARTY_PATTERN,
+} from "@/lib/server/canton-party-resolver";
 
 /**
  * /api/canton-command — Server-side proxy to submit DAML commands to Canton.
@@ -25,8 +28,6 @@ import {
  *
  * This keeps the Canton auth token server-side and avoids CORS.
  */
-
-const RECIPIENT_ALIAS_MAP_RAW = process.env.CANTON_RECIPIENT_PARTY_ALIASES || "";
 const ALLOW_OPERATOR_FALLBACK =
   (process.env.CANTON_ALLOW_OPERATOR_FALLBACK || "").toLowerCase() === "true";
 
@@ -59,6 +60,8 @@ function buildTemplateMap(): Record<string, string> {
     CantonDebtPosition:      `${pkgId}:CantonLending:CantonDebtPosition`,
     // CantonCoinToken module
     CantonCoin:              `${pkgId}:CantonCoinToken:CantonCoin`,
+    // CantonCoinMint module
+    CoinMintService:         `${pkgId}:CantonCoinMint:CoinMintService`,
     // Minted.Protocol.V3 module
     BridgeService:           `${pkgId}:Minted.Protocol.V3:BridgeService`,
     MUSDSupplyService:       `${pkgId}:Minted.Protocol.V3:MUSDSupplyService`,
@@ -67,27 +70,6 @@ function buildTemplateMap(): Record<string, string> {
     ComplianceRegistry:      `${pkgId}:Compliance:ComplianceRegistry`,
   };
 }
-
-function parseRecipientAliasMap(): Record<string, string> {
-  if (!RECIPIENT_ALIAS_MAP_RAW.trim()) return {};
-  try {
-    const parsed = JSON.parse(RECIPIENT_ALIAS_MAP_RAW);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    return Object.fromEntries(
-      Object.entries(parsed).filter(
-        ([from, to]) =>
-          typeof from === "string" &&
-          from.trim().length > 0 &&
-          typeof to === "string" &&
-          to.trim().length > 0
-      )
-    ) as Record<string, string>;
-  } catch {
-    return {};
-  }
-}
-
-const RECIPIENT_ALIAS_MAP = parseRecipientAliasMap();
 
 /** Resolve a short name or pass through a fully-qualified template ID. */
 function resolveTemplateId(tpl: string): string {
@@ -100,15 +82,19 @@ function resolveTemplateId(tpl: string): string {
 }
 
 function resolveRequestedParty(rawParty: unknown): string {
-  if (typeof rawParty !== "string" || !rawParty.trim()) {
-    if (ALLOW_OPERATOR_FALLBACK) return getCantonParty();
-    throw new Error("Missing Canton party for command submission");
-  }
-  const party = rawParty.trim();
-  if (party.length > 200 || !CANTON_PARTY_PATTERN.test(party)) {
+  const raw = typeof rawParty === "string" ? rawParty : undefined;
+  try {
+    const resolved = resolvePartyViaSharedResolver(
+      raw ? [raw] : undefined,
+      { allowFallback: ALLOW_OPERATOR_FALLBACK }
+    );
+    return resolved.resolvedParty;
+  } catch {
+    if (!raw || !raw.trim()) {
+      throw new Error("Missing Canton party for command submission");
+    }
     throw new Error("Invalid Canton party");
   }
-  return RECIPIENT_ALIAS_MAP[party] || party;
 }
 
 function shouldOperatorCosignCreate(

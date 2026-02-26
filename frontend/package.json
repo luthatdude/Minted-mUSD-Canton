@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:clean": "rm -rf .next && next dev -p 3001",
+    "dev:restart": "pkill -f 'next dev|next-server' || true; rm -rf .next; next dev -p 3001",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",

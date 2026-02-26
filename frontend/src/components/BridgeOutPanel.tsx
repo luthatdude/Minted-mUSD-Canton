@@ -534,8 +534,20 @@ export function BridgeOutPanel({ existingCantonParty }: BridgeOutPanelProps) {
                   Transaction Failed
                 </p>
                 <p className="text-xs text-gray-400 mt-1 break-all">
-                  {txError}
+                  {txError.includes("user rejected") || txError.includes("ACTION_REJECTED")
+                    ? "Transaction was rejected in your wallet."
+                    : txError.includes("insufficient funds")
+                    ? "Insufficient ETH for gas fees. Get Sepolia ETH from a faucet."
+                    : txError.includes("UNPREDICTABLE_GAS")
+                    ? "Transaction would fail on-chain. The bridge may be paused or parameters changed."
+                    : txError}
                 </p>
+                <button
+                  onClick={handleReset}
+                  className="mt-2 text-xs text-brand-400 hover:text-brand-300 underline transition-colors"
+                >
+                  Try again
+                </button>
               </div>
               <button
                 onClick={handleReset}

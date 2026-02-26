@@ -20,7 +20,7 @@ type DepositAsset = "USDC" | "USDCx" | "CTN";
 
 const POOL_TAB_CONFIG = [
   { key: "smusd" as CantonPoolTab, label: "smUSD", badge: "Yield Vault", color: "from-emerald-500 to-teal-500" },
-  { key: "ethpool" as CantonPoolTab, label: "ETH Pool", badge: "smUSD-E", color: "from-blue-500 to-indigo-500" },
+  { key: "ethpool" as CantonPoolTab, label: "Deltra Neutral", badge: "smUSD-E", color: "from-blue-500 to-indigo-500" },
   { key: "boostpool" as CantonPoolTab, label: "Boost Pool", badge: "CTN Yield", color: "from-yellow-400 to-orange-500" },
 ];
 
@@ -217,22 +217,115 @@ export function CantonStake() {
 
       // ── STANDARD REDEEMABLE PATH ──────────────────────────
       const freshTokens = fresh.tokens || [];
+      const totalAvailable = freshTokens.reduce((s, t) => s + parseTokenAmount(t), 0);
 
-      const token = await selectTokenForRequestedAmount(
-        fresh.party,
-        "CantonMUSD",
-        "CantonMUSD_Split",
-        freshTokens,
-        parsedAmount,
-        (refreshed) => refreshed.tokens || [],
-        "mUSD"
-      );
-      const resp = await cantonExercise("CantonStakingService", freshService.contractId, "Stake", {
-        user: fresh.party, musdCid: token.contractId,
-      }, { party: fresh.party });
-      if (!resp.success) throw new Error(resp.error || "Stake failed");
-      setTxSuccess(`Staked ${fmtAmount(parsedAmount)} mUSD → smUSD shares`);
-      setAmount(""); await refresh(); void loadPreflight();
+      if (totalAvailable < parsedAmount - EPSILON) {
+        throw new Error(`Insufficient mUSD balance. Available: ${fmtAmount(totalAvailable)}, requested: ${fmtAmount(parsedAmount)}.`);
+      }
+
+      const coveringToken = pickCoveringToken(freshTokens, parsedAmount);
+
+      if (coveringToken) {
+        // ── Single-token path ──
+        let useToken = coveringToken;
+        const coveringAmt = parseTokenAmount(coveringToken);
+        if (coveringAmt > parsedAmount + EPSILON) {
+          // Split to exact size
+          const splitResp = await cantonExercise("CantonMUSD", coveringToken.contractId, "CantonMUSD_Split", { splitAmount: parsedAmount.toString() }, { party: fresh.party });
+          if (!splitResp.success) throw new Error(splitResp.error || "Failed to split mUSD token.");
+          const afterSplit = await fetchFreshBalances(activeParty);
+          const splitToken = pickExactOrCoveringToken(afterSplit.tokens || [], parsedAmount);
+          if (!splitToken) throw new Error("Unable to select mUSD token after split.");
+          useToken = splitToken;
+          // Refresh service CID (split consumed the token)
+          freshService = afterSplit.stakingService || freshService;
+          if (!freshService) {
+            const opF = await fetchFreshBalances(null).catch(() => null);
+            freshService = opF?.stakingService || null;
+          }
+          if (!freshService) throw new Error("Staking service not found after split");
+        }
+
+        const resp = await cantonExercise("CantonStakingService", freshService.contractId, "Stake", {
+          user: fresh.party, musdCid: useToken.contractId,
+        }, { party: fresh.party });
+        if (!resp.success) {
+          const errMsg = resp.error || "Stake failed";
+          if (["CONTRACT_NOT_FOUND", "Contract could not be found with id", "INCONSISTENT"].some(s => errMsg.includes(s))) {
+            // Retry once with fully fresh data
+            const retryFresh = await fetchFreshBalances(activeParty);
+            let retrySvc = retryFresh.stakingService;
+            if (!retrySvc) { const opF = await fetchFreshBalances(null).catch(() => null); retrySvc = opF?.stakingService || null; }
+            if (!retrySvc) throw new Error("Staking service not found on retry");
+            const retryToken = pickExactOrCoveringToken(retryFresh.tokens || [], parsedAmount);
+            if (!retryToken) throw new Error("No mUSD token available on retry.");
+            const retryResp = await cantonExercise("CantonStakingService", retrySvc.contractId, "Stake", { user: retryFresh.party, musdCid: retryToken.contractId }, { party: retryFresh.party });
+            if (!retryResp.success) throw new Error("Stake failed after retry. Please try again.");
+            setTxSuccess(`Staked ${fmtAmount(parsedAmount)} mUSD → smUSD shares (retried after stale CID)`);
+            setAmount(""); await refresh(); void loadPreflight();
+            return;
+          }
+          throw new Error(errMsg);
+        }
+        setTxSuccess(`Staked ${fmtAmount(parsedAmount)} mUSD → smUSD shares`);
+        setAmount(""); await refresh(); void loadPreflight();
+      } else {
+        // ── Multi-contract sequential stake ──
+        // No single token covers the requested amount, but total does.
+        console.log("[CantonStake] Multi-contract stake:", { requested: parsedAmount, totalAvailable, tokenCount: freshTokens.length });
+        const sorted = [...freshTokens].sort((a, b) => parseTokenAmount(b) - parseTokenAmount(a));
+        let remaining = parsedAmount;
+        let stakesCompleted = 0;
+        let currentParty = fresh.party;
+        let currentServiceCid = freshService.contractId;
+
+        for (const token of sorted) {
+          if (remaining <= EPSILON) break;
+          const tokenAmt = parseTokenAmount(token);
+          if (tokenAmt <= EPSILON) continue;
+
+          if (tokenAmt <= remaining + EPSILON) {
+            // Use entire token
+            const resp = await cantonExercise("CantonStakingService", currentServiceCid, "Stake", {
+              user: currentParty, musdCid: token.contractId,
+            }, { party: currentParty });
+            if (!resp.success) throw new Error(resp.error || `Stake step ${stakesCompleted + 1} failed`);
+            remaining -= tokenAmt;
+            stakesCompleted++;
+            // Refresh service CID (Stake is consuming)
+            if (remaining > EPSILON) {
+              const reFresh = await fetchFreshBalances(activeParty);
+              let svc = reFresh.stakingService;
+              if (!svc) { const opF = await fetchFreshBalances(null).catch(() => null); svc = opF?.stakingService || null; }
+              if (!svc) throw new Error("Staking service not found during multi-token stake");
+              currentServiceCid = svc.contractId;
+              currentParty = reFresh.party;
+            }
+          } else {
+            // Token larger than remaining — split and stake
+            const splitResp = await cantonExercise("CantonMUSD", token.contractId, "CantonMUSD_Split", { splitAmount: remaining.toString() }, { party: currentParty });
+            if (!splitResp.success) throw new Error(splitResp.error || "Failed to split mUSD token");
+            const afterSplit = await fetchFreshBalances(activeParty);
+            const splitToken = pickExactOrCoveringToken(afterSplit.tokens || [], remaining);
+            if (!splitToken) throw new Error("Unable to find split token");
+            let svc = afterSplit.stakingService;
+            if (!svc) { const opF = await fetchFreshBalances(null).catch(() => null); svc = opF?.stakingService || null; }
+            if (!svc) throw new Error("Staking service not found after split");
+            const resp = await cantonExercise("CantonStakingService", svc.contractId, "Stake", {
+              user: afterSplit.party, musdCid: splitToken.contractId,
+            }, { party: afterSplit.party });
+            if (!resp.success) throw new Error(resp.error || "Stake failed after split");
+            remaining = 0;
+            stakesCompleted++;
+          }
+        }
+
+        if (remaining > EPSILON) {
+          throw new Error(`Could only stake ${fmtAmount(parsedAmount - remaining)} of ${fmtAmount(parsedAmount)} mUSD.`);
+        }
+        setTxSuccess(`Staked ${fmtAmount(parsedAmount)} mUSD → smUSD shares (${stakesCompleted} transactions)`);
+        setAmount(""); await refresh(); void loadPreflight();
+      }
     } catch (err: any) { setTxError(err.message); }
     finally { setTxLoading(false); }
   }
@@ -263,7 +356,7 @@ export function CantonStake() {
     finally { setTxLoading(false); }
   }
 
-  /* ── ETH Pool handler ── */
+  /* ── ETH Deltra Neutral Staking handler ── */
   async function handleEthPoolStake() {
     if (!ethPoolService) return;
     setTxLoading(true); setTxError(null); setTxSuccess(null);
@@ -277,9 +370,9 @@ export function CantonStake() {
         const operatorFresh = await fetchFreshBalances(null).catch(() => null);
         freshService = operatorFresh?.ethPoolService || null;
       }
-      if (!freshService) throw new Error("ETH Pool service not found");
+      if (!freshService) throw new Error("ETH Deltra Neutral Staking service not found");
 
-      // Use fresh token lists
+      // Use fresh token lists (legacy multi-asset routing retained for DAML compatibility)
       const freshPureUsdc = (fresh.usdcTokens || []).filter(t => t.template !== "USDCx");
       const freshUsdcx = (fresh.usdcTokens || []).filter(t => t.template === "USDCx");
       const freshCoins = fresh.cantonCoinTokens || [];
@@ -328,7 +421,7 @@ export function CantonStake() {
     finally { setTxLoading(false); }
   }
 
-  /* ── ETH Pool unstake handler ── */
+  /* ── ETH Deltra Neutral Staking unstake handler ── */
   async function handleEthPoolUnstake() {
     if (!ethPoolService || smusdETokens.length === 0) return;
     setTxLoading(true); setTxError(null); setTxSuccess(null);
@@ -342,7 +435,7 @@ export function CantonStake() {
         const operatorFresh = await fetchFreshBalances(null).catch(() => null);
         freshService = operatorFresh?.ethPoolService || null;
       }
-      if (!freshService) throw new Error("ETH Pool service not found");
+      if (!freshService) throw new Error("ETH Deltra Neutral Staking service not found");
       const freshSmusdE = fresh.smusdETokens || [];
       const smusdE = await selectTokenForRequestedAmount(
         fresh.party,
@@ -665,8 +758,8 @@ export function CantonStake() {
                 <div className="grid gap-4 grid-cols-2">
                   <StatCard label="Share Price" value={`${smusdSharePrice.toFixed(4)} mUSD`} subValue="per smUSD" color="green" />
                   <StatCard label="Estimated APY" value={`${smusdApy.toFixed(2)}%`} color="green" />
-                  <StatCard label="Available mUSD" value={fmtAmount(totalMusd)} subValue={`${tokens.length} contracts`} color="blue" />
-                  <StatCard label="Your smUSD" value={fmtAmount(totalSmusd, 4)} subValue={totalSmusd > 0 ? `\u2248 ${fmtAmount(smusdPositionValue)} mUSD` : undefined} color="purple" />
+                  <StatCard label="Available mUSD" value={hasConnectedUserParty ? fmtAmount(totalMusd) : "—"} subValue={hasConnectedUserParty ? `${tokens.length} contracts` : "Connect wallet"} color="blue" />
+                  <StatCard label="Your smUSD" value={hasConnectedUserParty ? fmtAmount(totalSmusd, 4) : "—"} subValue={hasConnectedUserParty && totalSmusd > 0 ? `\u2248 ${fmtAmount(smusdPositionValue)} mUSD` : hasConnectedUserParty ? undefined : "Connect wallet"} color="purple" />
                 </div>
                 <div className="grid gap-4 grid-cols-2">
                   <StatCard label="Pool TVL" value={fmtAmount(smusdTVL) + " mUSD"} color="blue" />
@@ -720,9 +813,9 @@ export function CantonStake() {
               <div className="mx-auto h-16 w-16 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-500 flex items-center justify-center">
                 <span className="text-white font-bold text-2xl">E</span>
               </div>
-              <h3 className="text-2xl font-bold text-white">ETH Pool Service</h3>
+              <h3 className="text-2xl font-bold text-white">ETH Deltra Neutral Staking</h3>
               <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-5 max-w-lg mx-auto">
-                <p className="text-sm text-gray-400">The ETH Pool service is not yet deployed on this Canton participant.</p>
+                <p className="text-sm text-gray-400">The ETH Deltra Neutral Staking service is not yet deployed on this Canton participant.</p>
               </div>
             </div>
           ) : (
@@ -731,11 +824,11 @@ export function CantonStake() {
                 <div className="card-gradient-border overflow-hidden">
                   <div className="flex border-b border-white/10">
                     <button className={`relative flex-1 px-6 py-4 text-center text-sm font-semibold transition-all ${tab === "stake" ? "text-white" : "text-gray-400 hover:text-white"}`} onClick={() => { setTab("stake"); setAmount(""); }}>
-                      <span className="relative z-10 flex items-center justify-center gap-2">Stake</span>
+                      <span className="relative z-10 flex items-center justify-center gap-2">Stake mUSD</span>
                       {tab === "stake" && <span className="absolute bottom-0 left-1/2 h-0.5 w-24 -translate-x-1/2 rounded-full bg-gradient-to-r from-blue-500 to-indigo-500" />}
                     </button>
                     <button className={`relative flex-1 px-6 py-4 text-center text-sm font-semibold transition-all ${tab === "unstake" ? "text-white" : "text-gray-400 hover:text-white"}`} onClick={() => { setTab("unstake"); setAmount(""); }}>
-                      <span className="relative z-10 flex items-center justify-center gap-2">Unstake</span>
+                      <span className="relative z-10 flex items-center justify-center gap-2">Unstake mUSD</span>
                       {tab === "unstake" && <span className="absolute bottom-0 left-1/2 h-0.5 w-24 -translate-x-1/2 rounded-full bg-gradient-to-r from-blue-500 to-indigo-500" />}
                     </button>
                   </div>
@@ -743,17 +836,10 @@ export function CantonStake() {
                   <div className="space-y-6 p-6">
                     {tab === "stake" ? (
                       <>
-                        {/* Deposit Asset Selector */}
-                        <div className="space-y-3">
-                          <label className="text-sm font-medium text-gray-400">Deposit Asset</label>
-                          <div className="grid grid-cols-3 gap-2">
-                            {(["USDC", "USDCx", "CTN"] as DepositAsset[]).map(asset => (
-                              <button key={asset} onClick={() => { setDepositAsset(asset); setSelectedAssetIdx(0); setAmount(""); }}
-                                className={`rounded-xl border px-4 py-3 text-sm font-semibold transition-all ${depositAsset === asset ? "border-blue-500 bg-blue-500/20 text-white" : "border-white/10 bg-surface-800/50 text-gray-400 hover:border-white/30 hover:text-white"}`}>
-                                {asset}
-                              </button>
-                            ))}
-                          </div>
+                        {/* mUSD deposit */}
+                        <div className="flex items-center gap-2 rounded-xl border border-blue-500/30 bg-blue-500/10 px-4 py-3">
+                          <span className="text-sm font-semibold text-white">mUSD</span>
+                          <span className="text-xs text-gray-400">Deposit mUSD into the ETH Deltra Neutral Staking to earn strategy yield.</span>
                         </div>
                         {/* Lock Tier */}
                         <div className="space-y-3">
@@ -768,11 +854,11 @@ export function CantonStake() {
                           </div>
                         </div>
                         {/* Amount Input */}
-                        {hasConnectedUserParty && selectedDepositTokens.length > 0 ? (
+                        {hasConnectedUserParty && tokens.length > 0 ? (
                           <div className="space-y-3">
                             <div className="flex items-center justify-between">
                               <label className="text-sm font-medium text-gray-400">Deposit Amount</label>
-                              <span className="text-xs text-gray-500">Balance: {fmtAmount(selectedDepositBalance)} {depositAsset}</span>
+                              <span className="text-xs text-gray-500">Balance: {fmtAmount(totalMusd)} mUSD</span>
                             </div>
                             <div className="relative rounded-xl border border-white/10 bg-surface-800/50 p-4 transition-all duration-300 focus-within:border-blue-500/50">
                               <div className="flex items-center gap-4">
@@ -786,12 +872,12 @@ export function CantonStake() {
                                 <div className="flex items-center gap-2">
                                   <button
                                     className="rounded-lg bg-blue-500/20 px-3 py-1.5 text-xs font-semibold text-blue-300 transition-colors hover:bg-blue-500/30"
-                                    onClick={() => setAmount(toInputAmount(selectedDepositBalance))}
+                                    onClick={() => setAmount(toInputAmount(totalMusd))}
                                   >
                                     MAX
                                   </button>
                                   <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
-                                    <span className="font-semibold text-white">{depositAsset}</span>
+                                    <span className="font-semibold text-white">mUSD</span>
                                   </div>
                                 </div>
                               </div>
@@ -800,19 +886,17 @@ export function CantonStake() {
                         ) : (
                           <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-4 text-center">
                             {!hasConnectedUserParty ? (
-                              <p className="text-sm text-gray-400">Connect Loop wallet to view {depositAsset} balances and stake.</p>
+                              <p className="text-sm text-gray-400">Connect Loop wallet to view your balances and stake.</p>
                             ) : (
                               <>
-                                <p className="text-sm text-gray-400">No {depositAsset} contracts found for this party.</p>
-                                <p className="text-xs text-gray-500 mt-1">
-                                  {depositAsset === "CTN" ? "Acquire CantonCoin via the faucet or bridge." : depositAsset === "USDCx" ? "Bridge USDCx from Ethereum or convert USDC." : "Bridge USDC from Ethereum to get started."}
-                                </p>
+                                <p className="text-sm text-gray-400">No mUSD available</p>
+                                <p className="text-xs text-gray-500 mt-1">Bridge or mint mUSD to fund this pool.</p>
                               </>
                             )}
                           </div>
                         )}
-                        <TxButton onClick={handleEthPoolStake} loading={txLoading} disabled={!hasConnectedUserParty || selectedDepositTokens.length === 0 || parsedAmount <= 0} className="w-full">
-                          {!hasConnectedUserParty ? "Connect Loop Wallet" : `Stake ${depositAsset} → smUSD-E`}
+                        <TxButton onClick={handleEthPoolStake} loading={txLoading} disabled={!hasConnectedUserParty || tokens.length === 0 || parsedAmount <= 0} className="w-full">
+                          {!hasConnectedUserParty ? "Connect Loop Wallet" : "Stake mUSD \u2192 smUSD-E"}
                         </TxButton>
                       </>
                     ) : (
@@ -865,17 +949,17 @@ export function CantonStake() {
               <div className="space-y-4">
                 <div className="grid gap-4 grid-cols-2">
                   <StatCard label="Share Price" value={`${ethPoolSharePrice.toFixed(4)} mUSD`} subValue="per smUSD-E" color="blue" />
-                  <StatCard label="Estimated APY" value={`${Math.max(0, (ethPoolSharePrice - 1) * 100).toFixed(2)}%`} color="green" />
+                  <StatCard label="Estimated APY %" value={`${Math.max(0, (ethPoolSharePrice - 1) * 100).toFixed(2)}%`} color="green" />
                   <StatCard
-                    label={`Available ${depositAsset}`}
-                    value={fmtAmount(selectedDepositBalance)}
-                    subValue={`${selectedDepositTokens.length} contracts`}
+                    label="Your mUSD Balance"
+                    value={hasConnectedUserParty ? fmtAmount(totalMusd) : "—"}
+                    subValue={hasConnectedUserParty ? `${tokens.length} contracts` : "Connect wallet"}
                     color="blue"
                   />
                   <StatCard
                     label="Your smUSD-E"
-                    value={fmtAmount(totalSmusdE, 4)}
-                    subValue={totalSmusdE > 0 ? `≈ ${fmtAmount(totalSmusdE * ethPoolSharePrice)} mUSD` : undefined}
+                    value={hasConnectedUserParty ? fmtAmount(totalSmusdE, 4) : "—"}
+                    subValue={hasConnectedUserParty && totalSmusdE > 0 ? `≈ ${fmtAmount(totalSmusdE * ethPoolSharePrice)} mUSD` : hasConnectedUserParty ? undefined : "Connect wallet"}
                     color="purple"
                   />
                   <StatCard label="Pool TVL" value={fmtAmount(ethPoolTVL) + " mUSD"} color="blue" />
@@ -883,11 +967,14 @@ export function CantonStake() {
                 </div>
                 <div className="card overflow-hidden">
                   <h3 className="text-sm font-medium text-gray-400 mb-3">Your Canton Assets</h3>
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between text-sm"><span className="text-gray-400">USDC</span><span className="text-white font-medium">{fmtAmount(totalUsdc)} ({usdcTokens.length} contracts)</span></div>
-                    <div className="flex items-center justify-between text-sm"><span className="text-gray-400">Canton Coin (CTN)</span><span className="text-white font-medium">{fmtAmount(totalCoin)} ({coinTokens.length} contracts)</span></div>
-                    <div className="flex items-center justify-between text-sm"><span className="text-gray-400">mUSD</span><span className="text-white font-medium">{fmtAmount(totalMusd)} ({tokens.length} contracts)</span></div>
-                  </div>
+                  {hasConnectedUserParty ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-sm"><span className="text-gray-400">mUSD</span><span className="text-white font-medium">{fmtAmount(totalMusd)} ({tokens.length} contracts)</span></div>
+                      <div className="flex items-center justify-between text-sm"><span className="text-gray-400">smUSD-E</span><span className="text-white font-medium">{fmtAmount(totalSmusdE, 4)} ({smusdETokens.length} contracts)</span></div>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-gray-500">Connect your Loop wallet to view balances</p>
+                  )}
                 </div>
                 <div className="card overflow-hidden border-l-4 border-blue-500">
                   <div className="flex items-start gap-4">
@@ -895,8 +982,8 @@ export function CantonStake() {
                       <svg className="h-5 w-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
                     </div>
                     <div>
-                      <h3 className="font-semibold text-white mb-1">ETH Pool — Fluid Strategy Yield</h3>
-                      <p className="text-sm text-gray-400">Deposit USDC, USDCx, or Canton Coin. Capital flows to Ethereum Treasury → Fluid T2/T4 vaults. Receive smUSD-E shares with optional time-lock boost multipliers (up to 2×).</p>
+                      <h3 className="font-semibold text-white mb-1">ETH Deltra Neutral Staking</h3>
+                      <p className="text-sm text-gray-400">Deposit mUSD into the ETH Deltra Neutral Staking to earn strategy yield. Receive smUSD-E shares with optional time-lock boost multipliers (up to 2×).</p>
                       <p className="text-xs text-gray-500 mt-2 font-mono">Service: {ethPoolService.contractId.slice(0, 24)}…</p>
                     </div>
                   </div>
@@ -905,14 +992,14 @@ export function CantonStake() {
             </div>
           )}
 
-          {/* How ETH Pool Works */}
+          {/* How ETH Deltra Neutral Staking Works */}
           <div className="card">
-            <h2 className="text-lg font-semibold text-white mb-5">How ETH Pool Works</h2>
+            <h2 className="text-lg font-semibold text-white mb-5">How ETH Deltra Neutral Staking Works</h2>
             <div className="grid gap-4 sm:grid-cols-4">
               <div className="rounded-xl bg-surface-800/50 p-4 border border-white/5">
                 <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-500/20 text-blue-400 font-bold text-sm mb-3">1</div>
-                <h3 className="font-medium text-white mb-1">Deposit Assets</h3>
-                <p className="text-sm text-gray-400">Deposit USDC, USDCx, or Canton Coin.</p>
+                <h3 className="font-medium text-white mb-1">Deposit mUSD</h3>
+                <p className="text-sm text-gray-400">Deposit mUSD into the ETH Deltra Neutral Staking.</p>
               </div>
               <div className="rounded-xl bg-surface-800/50 p-4 border border-white/5">
                 <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-500/20 text-indigo-400 font-bold text-sm mb-3">2</div>

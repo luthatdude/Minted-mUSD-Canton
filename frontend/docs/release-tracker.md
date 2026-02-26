@@ -1,5 +1,30 @@
 # Release Tracker
 
+## 2026-02-26 — Canton Party Identity Unification
+
+**Release:** Unified party resolution across all Canton API routes + UI identity transparency
+**Branch:** `fix/strict-copy-deck-eth-delta-neutral`
+
+### Summary
+
+- Created shared server-side party resolver (`canton-party-resolver.ts`) used by all Canton API routes
+- Extended `guardBodyParty()` to apply alias resolution for POST mutation routes
+- Added `effectiveParty` + `aliasApplied` fields to all API responses
+- Added UI identity status block showing connected vs effective party on Canton pages
+- Deprecated original wallet identity (`...ebad`) — different participant namespace
+- Documented canonical party identity policy in devnet-ops-runbook.md
+
+### Validation
+
+| Gate | Result |
+|------|--------|
+| `tsc --noEmit` | TBD |
+| API consistency (3 endpoints, same effectiveParty) | TBD |
+| UI identity transparency visible | TBD |
+| Regression scans (no stale references) | TBD |
+
+---
+
 ## 2026-02-25 — Hybrid Fallback Decommission
 
 **Release:** Remove dead hybrid conversion code paths from CIP-56 components

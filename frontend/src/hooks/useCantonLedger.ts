@@ -110,6 +110,7 @@ export interface CantonBalancesData {
   lendingService: LendingServiceInfo | null;
   priceFeeds: PriceFeedInfo[];
   directMintService: { contractId: string; paused: boolean } | null;
+  coinMintService: { contractId: string; cantonCoinPrice: string } | null;
   smusdTokens: SimpleToken[];
   totalSmusd: string;
   smusdETokens: SimpleToken[];
@@ -124,6 +125,9 @@ export interface CantonBalancesData {
   debtPositions: DebtPositionInfo[];
   ledgerOffset: number;
   party: string;
+  effectiveParty?: string;
+  connectedParty?: string;
+  aliasApplied?: boolean;
   timestamp: string;
 }
 
@@ -242,6 +246,9 @@ export async function refreshPriceFeeds(): Promise<{ success: boolean; refreshed
  */
 export interface BridgePreflightData {
   party: string;
+  effectiveParty?: string;
+  connectedParty?: string;
+  aliasApplied?: boolean;
   userCip56Balance: string;
   userRedeemableBalance: string;
   userTotal: string;
@@ -276,6 +283,9 @@ export async function fetchBridgePreflight(party: string): Promise<BridgePreflig
  */
 export interface OpsHealthData {
   party: string;
+  effectiveParty?: string;
+  connectedParty?: string;
+  aliasApplied?: boolean;
   operatorParty: string;
   userCip56Balance: string;
   userRedeemableBalance: string;
@@ -449,6 +459,24 @@ export async function nativeCip56Stake(
     return { success: false, mode: "native", httpStatus: resp.status, error: result.error || `HTTP ${resp.status}` };
   }
   return result;
+}
+
+/**
+ * Check that balances and preflight data were resolved for the same party.
+ * Returns null if consistent, or a warning message if mismatched.
+ *
+ * Use this when displaying combined data to avoid silently mixing
+ * data from different party resolutions.
+ */
+export function checkPartyConsistency(
+  balances: CantonBalancesData | null,
+  preflight: BridgePreflightData | null
+): string | null {
+  if (!balances || !preflight) return null;
+  const bParty = balances.effectiveParty || balances.party;
+  const pParty = preflight.effectiveParty || preflight.party;
+  if (bParty === pParty) return null;
+  return `Party resolution mismatch detected (balances: ${bParty.slice(0, 30)}..., preflight: ${pParty.slice(0, 30)}...). Refresh and retry.`;
 }
 
 /**

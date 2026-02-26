@@ -12,14 +12,40 @@ Operational procedures for maintaining the Minted mUSD Canton devnet bridge infr
 
 Do not run `npm run build` and `next dev` concurrently. Running a production build while the dev server is active corrupts the `.next/` compilation cache, causing all API routes to return HTML 500 error pages.
 
-After running `npm run build`, always restart the dev server:
+After running `npm run build`, always restart the dev server with a clean cache:
 
 ```bash
-# Kill the running dev server, then:
-npm run dev -- -p 3001
+npm run dev:clean
 ```
 
 Wait for the server to report "Ready" before running API or canary checks.
+
+### Next.js ENOENT (`_document.js`) Recovery
+
+**Symptom:** Frontend returns HTTP 500 with:
+```
+ENOENT: no such file or directory, open '.../.next/server/pages/_document.js'
+```
+
+**Cause:** The `.next/` compilation cache becomes corrupted when:
+1. `npm run build` runs while `next dev` is active (most common)
+2. The dev server crashes mid-compilation
+3. The `.next/` directory is partially deleted
+
+**Fix:**
+1. Stop the dev server (`Ctrl+C` or `pkill -f 'next dev'`)
+2. Clear the stale cache: `rm -rf .next`
+3. Restart with a clean build:
+   ```bash
+   npm run dev:clean
+   ```
+
+**One-liner recovery (kills existing server + clean restart):**
+```bash
+npm run dev:restart
+```
+
+**Prevention:** Always use `npm run dev:clean` after running `npm run build`.
 
 ## Daily Verify (One Command)
 
@@ -262,6 +288,52 @@ npm run ops:topup -- --target 2000 --chunk 250 --execute --mode protocol
    ```
 4. Update `.env.local` and restart the dev server.
 
+## Canton Party Identity Policy
+
+Canton parties on this devnet follow a two-layer identity model:
+
+**Terms:**
+- **connectedParty**: the party identifier from the Loop SDK session (e.g. `dde6467e...::1220...af9e`)
+- **effectiveParty**: the resolved party used for API queries and command submission (e.g. `minted-user-12345678::1220...edce`)
+- **aliasApplied**: `true` when connectedParty differs from effectiveParty due to alias mapping
+
+**Resolution order (server-side — `canton-party-resolver.ts`):**
+1. Validate strict Canton party format: `hint::1220<64-hex>`
+2. Apply `CANTON_RECIPIENT_PARTY_ALIASES` env map (JSON: `{ "from-party": "to-party" }`)
+3. If no party provided and `allowFallback=true`, use `CANTON_PARTY`
+
+**Resolution order (client-side — `canton-party.ts`):**
+1. If namespace matches local participant, pass through
+2. Apply `NEXT_PUBLIC_CANTON_PARTY_ALIASES_JSON` env map
+3. Apply legacy namespace remap by hint (env or built-in)
+4. Otherwise pass through unchanged
+
+**Rules:**
+- Both layers use the same validation pattern. The server-side resolver is authoritative.
+- `guardBodyParty()` (POST routes) resolves through the shared resolver for alias consistency.
+- The UI surfaces both connected and effective identity when they differ.
+- Legacy party `eb4e4b84...::1220...ebad` is **deprecated** — different participant namespace, not locally submit-capable. See "Deprecated Identities" below.
+- Loop party `dde6467e...::1220...af9e` aliases to local `minted-user-12345678::1220...edce` via `CANTON_RECIPIENT_PARTY_ALIASES`.
+- If no valid local alias exists for a non-local party, mutation actions are disabled with a `NON_LOCAL_PARTY` blocker.
+
+**Local participant namespaces (current devnet):**
+
+| Namespace Key | Origin | isLocal |
+|---|---|:---:|
+| `1220...edce` | Current devnet participant | Yes |
+| `1220...ebad` | Previous participant (deprecated) | No |
+| `1220...af9e` | Loop devnet participant | No |
+
+### Deprecated Identities
+
+The original devnet wallet `eb4e4b84e7db045557f78d9b5e8c2b98::12202dadec11aab8a9dc6ad790b6caab962e2c39ff419a2ae0d12e9ce6e87601ebad` belongs to a prior Canton participant instance with a different signing key. It is:
+- Not registered in the local participant party list
+- Not submit-capable on this participant
+- Returns empty ACS queries (zero contract visibility)
+
+Do not use this party for testing. Use the canonical local identity instead:
+`minted-user-12345678::122006df00c631440327e68ba87f61795bbcd67db26142e580137e5038649f22edce`
+
 ## Environment Reference
 
 | Variable | Purpose | Example |
@@ -271,6 +343,8 @@ npm run ops:topup -- --target 2000 --chunk 250 --execute --mode protocol
 | `NEXT_PUBLIC_CIP56_PACKAGE_ID` | ble-protocol-cip56 package (CIP-56 interfaces) | `11347710...` |
 | `CANTON_OPERATOR_INVENTORY_FLOOR` | Health check floor target (mUSD) | `2000` |
 | `CANTON_HYBRID_FALLBACK_ENABLED` | Enable/disable hybrid conversion fallback | `true` (default) |
+| `CANTON_RECIPIENT_PARTY_ALIASES` | Server-side party alias map (JSON) | `{"from::1220...":"to::1220..."}` |
+| `NEXT_PUBLIC_CANTON_PARTY_ALIASES_JSON` | Client-side party alias map (JSON) | `{"from::1220...":"to::1220..."}` |
 | `CANTON_CANARY_PARTY` | Default party for ops scripts | `minted-canary::1220...` |
 
 ## Script Reference

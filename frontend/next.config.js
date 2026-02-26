@@ -1,7 +1,20 @@
+const path = require('path');
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  
+  // Pin tracing root to the frontend workspace to avoid lockfile-root ambiguity.
+  outputFileTracingRoot: path.resolve(__dirname),
+
+  webpack: (config) => {
+    // MetaMask SDK imports react-native modules that don't exist in web context
+    config.resolve.fallback = {
+      ...config.resolve.fallback,
+      '@react-native-async-storage/async-storage': false,
+    };
+    return config;
+  },
+
   // Security headers — CSP is now set dynamically per-request in _document.tsx
   // with a unique nonce (FE-H-03 remediation). Only non-CSP headers remain here.
   async headers() {

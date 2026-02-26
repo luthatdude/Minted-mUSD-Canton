@@ -1,4 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import {
+  resolveRequestedParty,
+  CANTON_PARTY_PATTERN,
+} from "@/lib/server/canton-party-resolver";
 
 /**
  * /api/canton-balances — Server-side proxy to Canton JSON API v2.
@@ -14,12 +18,10 @@ const CANTON_BASE_URL =
   `http://${process.env.CANTON_HOST || "localhost"}:${process.env.CANTON_PORT || "7575"}`;
 const CANTON_TOKEN = process.env.CANTON_TOKEN || "";
 const CANTON_PARTY = process.env.CANTON_PARTY || "";
-const RECIPIENT_ALIAS_MAP_RAW = process.env.CANTON_RECIPIENT_PARTY_ALIASES || "";
 const PACKAGE_ID =
   process.env.NEXT_PUBLIC_DAML_PACKAGE_ID ||
   process.env.CANTON_PACKAGE_ID ||
   "";
-const CANTON_PARTY_PATTERN = /^[A-Za-z0-9._:-]+::1220[0-9a-f]{64}$/i;
 const PKG_ID_PATTERN = /^[0-9a-f]{64}$/i;
 
 function validateRequiredConfig(): string | null {
@@ -28,37 +30,6 @@ function validateRequiredConfig(): string | null {
   if (!PACKAGE_ID || !PKG_ID_PATTERN.test(PACKAGE_ID))
     return "CANTON_PACKAGE_ID/NEXT_PUBLIC_DAML_PACKAGE_ID not configured";
   return null;
-}
-
-function parseRecipientAliasMap(): Record<string, string> {
-  if (!RECIPIENT_ALIAS_MAP_RAW.trim()) return {};
-  try {
-    const parsed = JSON.parse(RECIPIENT_ALIAS_MAP_RAW);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    return Object.fromEntries(
-      Object.entries(parsed).filter(
-        ([from, to]) =>
-          typeof from === "string" &&
-          from.trim().length > 0 &&
-          typeof to === "string" &&
-          to.trim().length > 0
-      )
-    ) as Record<string, string>;
-  } catch {
-    return {};
-  }
-}
-
-const RECIPIENT_ALIAS_MAP = parseRecipientAliasMap();
-
-function resolveRequestedParty(rawParty: string | string[] | undefined): string {
-  const candidate = Array.isArray(rawParty) ? rawParty[0] : rawParty;
-  if (!candidate || !candidate.trim()) return CANTON_PARTY;
-  const party = candidate.trim();
-  if (party.length > 200 || !CANTON_PARTY_PATTERN.test(party)) {
-    throw new Error("Invalid Canton party");
-  }
-  return RECIPIENT_ALIAS_MAP[party] || party;
 }
 
 interface CantonMUSDToken {
@@ -165,6 +136,7 @@ interface BalancesResponse {
   lendingService: LendingServiceInfo | null;
   priceFeeds: PriceFeedInfo[];
   directMintService: { contractId: string; paused: boolean; serviceName?: string; hasValidCompliance?: boolean } | null;
+  coinMintService: { contractId: string; cantonCoinPrice: string } | null;
   smusdTokens: SimpleToken[];
   totalSmusd: string;
   smusdETokens: SimpleToken[];
@@ -179,6 +151,9 @@ interface BalancesResponse {
   debtPositions: DebtPositionInfo[];
   ledgerOffset: number;
   party: string;
+  effectiveParty: string;
+  connectedParty?: string;
+  aliasApplied: boolean;
   timestamp: string;
 }
 
@@ -287,8 +262,13 @@ export default async function handler(
   }
 
   let actAsParty: string;
+  let aliasApplied = false;
+  let connectedParty: string | undefined;
   try {
-    actAsParty = resolveRequestedParty(req.query.party);
+    const resolved = resolveRequestedParty(req.query.party, { allowFallback: true });
+    actAsParty = resolved.resolvedParty;
+    aliasApplied = resolved.wasAliased;
+    connectedParty = resolved.wasAliased ? resolved.requestedParty : undefined;
   } catch (err: any) {
     return res.status(400).json({ error: err?.message || "Invalid Canton party" });
   }
@@ -318,6 +298,7 @@ export default async function handler(
       templateId("CantonCoinToken", "CantonCoin"),
       templateId("CantonDirectMint", "CantonUSDC"),
       templateId("CantonDirectMint", "USDCx"),
+      templateId("CantonCoinMint", "CoinMintService"),
     ] as const;
 
     const entryGroups = await Promise.all(
@@ -336,6 +317,7 @@ export default async function handler(
     let boostPoolService: BoostPoolServiceInfo | null = null;
     let lendingService: LendingServiceInfo | null = null;
     let directMintService: { contractId: string; paused: boolean; serviceName?: string; hasValidCompliance?: boolean } | null = null;
+    let coinMintService: { contractId: string; cantonCoinPrice: string } | null = null;
     let stakingHasValidCompliance = false;
     const smusdTokens: SimpleToken[] = [];
     const smusdETokens: SimpleToken[] = [];
@@ -583,6 +565,12 @@ export default async function handler(
           amount: (p.amount as string) || "0",
           template: "USDCx",
         });
+      } else if (entityName === "CoinMintService") {
+        const p = evt.createArgument;
+        coinMintService = {
+          contractId: evt.contractId,
+          cantonCoinPrice: (p.cantonCoinPrice as string) || "0",
+        };
       }
     }
 
@@ -593,6 +581,7 @@ export default async function handler(
       effectiveParty !== CANTON_PARTY &&
       (
         !directMintService ||
+        !coinMintService ||
         !bridgeService ||
         !supplyService ||
         !stakingService ||
@@ -606,6 +595,7 @@ export default async function handler(
           templateId("Minted.Protocol.V3", "BridgeService"),
           templateId("Minted.Protocol.V3", "MUSDSupplyService"),
           templateId("CantonDirectMint", "CantonDirectMintService"),
+          templateId("CantonCoinMint", "CoinMintService"),
           templateId("CantonSMUSD", "CantonStakingService"),
           templateId("CantonETHPool", "CantonETHPoolService"),
           templateId("CantonBoostPool", "CantonBoostPoolService"),
@@ -748,6 +738,12 @@ export default async function handler(
             ) {
               directMintService = candidate;
             }
+          } else if (!coinMintService && entityName === "CoinMintService") {
+            const p = evt.createArgument;
+            coinMintService = {
+              contractId: evt.contractId,
+              cantonCoinPrice: (p.cantonCoinPrice as string) || "0",
+            };
           }
         }
       } catch (fallbackErr) {
@@ -786,6 +782,7 @@ export default async function handler(
       lendingService,
       priceFeeds,
       directMintService,
+      coinMintService,
       smusdTokens,
       totalSmusd,
       smusdETokens,
@@ -800,6 +797,9 @@ export default async function handler(
       debtPositions,
       ledgerOffset: offset,
       party: actAsParty,
+      effectiveParty: actAsParty,
+      ...(connectedParty ? { connectedParty } : {}),
+      aliasApplied,
       timestamp: new Date().toISOString(),
     });
   } catch (err: any) {
