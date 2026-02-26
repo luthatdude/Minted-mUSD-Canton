@@ -1,4 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import {
+  resolveRequestedParty,
+  CANTON_PARTY_PATTERN,
+} from "@/lib/server/canton-party-resolver";
 
 /**
  * /api/canton-ops-health — Operator inventory health check.
@@ -25,7 +29,6 @@ const CIP56_PACKAGE_ID =
   process.env.NEXT_PUBLIC_CIP56_PACKAGE_ID ||
   process.env.CIP56_PACKAGE_ID ||
   "";
-const CANTON_PARTY_PATTERN = /^[A-Za-z0-9._:-]+::1220[0-9a-f]{64}$/i;
 const PKG_ID_PATTERN = /^[0-9a-f]{64}$/i;
 
 const INVENTORY_FLOOR = Math.max(
@@ -137,9 +140,16 @@ export default async function handler(
     return res.status(500).json({ error: configError, errorType: "CONFIG_ERROR" });
   }
 
-  const party = (req.query.party as string)?.trim();
-  if (!party || !CANTON_PARTY_PATTERN.test(party)) {
-    return res.status(400).json({ error: "Invalid or missing Canton party" });
+  let party: string;
+  let aliasApplied = false;
+  let connectedParty: string | undefined;
+  try {
+    const resolved = resolveRequestedParty(req.query.party);
+    party = resolved.resolvedParty;
+    aliasApplied = resolved.wasAliased;
+    connectedParty = resolved.wasAliased ? resolved.requestedParty : undefined;
+  } catch (err: any) {
+    return res.status(400).json({ error: err?.message || "Invalid or missing Canton party" });
   }
 
   const operatorParty = CANTON_PARTY;
@@ -222,6 +232,9 @@ export default async function handler(
     res.setHeader("Cache-Control", "no-store, max-age=0");
     return res.status(200).json({
       party,
+      effectiveParty: party,
+      ...(connectedParty ? { connectedParty } : {}),
+      aliasApplied,
       operatorParty,
       userCip56Balance: userCip56Balance.toFixed(6),
       userRedeemableBalance: userRedeemableBalance.toFixed(6),

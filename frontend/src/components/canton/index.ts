@@ -6,3 +6,4 @@ export { CantonBorrow } from "./CantonBorrow";
 export { CantonBridge } from "./CantonBridge";
 export { CantonAdmin } from "./CantonAdmin";
 export { CantonBalancesPage } from "./CantonBalances";
+export { CantonIdentityStatus } from "./CantonIdentityStatus";

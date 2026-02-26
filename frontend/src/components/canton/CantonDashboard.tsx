@@ -6,6 +6,7 @@ import { ProtocolStatsBlock } from "@/components/ProtocolStatsBlock";
 import { useCantonLedger } from "@/hooks/useCantonLedger";
 import { useLoopWallet } from "@/hooks/useLoopWallet";
 import { CantonMint } from "@/components/canton/CantonMint";
+import { CantonIdentityStatus } from "./CantonIdentityStatus";
 
 type DashboardTab = "protocol" | "portfolio" | "mint";
 
@@ -128,6 +129,13 @@ export function CantonDashboard() {
 
   return (
     <div className="space-y-8">
+      {activeParty && (
+        <CantonIdentityStatus
+          connectedParty={activeParty}
+          effectiveParty={data?.effectiveParty || data?.party || null}
+          aliasApplied={data?.aliasApplied ?? false}
+        />
+      )}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <PageHeader
           title="Dashboard"

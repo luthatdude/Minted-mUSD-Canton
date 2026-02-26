@@ -48,6 +48,7 @@ export type { IdempotencyStoreOptions } from "./idempotency";
 export {
   guardMethod,
   guardBodyParty,
+  guardBodyPartyResolved,
   guardQueryParty,
 } from "./auth";
-export type { HttpMethod } from "./auth";
+export type { HttpMethod, ResolvedParty } from "./auth";

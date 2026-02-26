@@ -3,8 +3,9 @@ import { ethers } from "ethers";
 import { BLE_BRIDGE_V9_ABI } from "@/abis/BLEBridgeV9";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
-import { useCantonLedger, cantonExercise, fetchFreshBalances, nativeCip56Redeem, fetchBridgePreflight, fetchOpsHealth, type BridgePreflightData, type OpsHealthData } from "@/hooks/useCantonLedger";
+import { useCantonLedger, cantonExercise, fetchFreshBalances, nativeCip56Redeem, fetchBridgePreflight, fetchOpsHealth, checkPartyConsistency, type BridgePreflightData, type OpsHealthData } from "@/hooks/useCantonLedger";
 import { useLoopWallet } from "@/hooks/useLoopWallet";
+import { CantonIdentityStatus } from "./CantonIdentityStatus";
 import { CONTRACTS } from "@/lib/config";
 import { formatTimestamp, formatUSD } from "@/lib/format";
 
@@ -69,6 +70,7 @@ export function CantonBridge() {
   const maxBridgeable = preflight ? parseFloat(preflight.maxBridgeable) : totalMusd;
   const operatorInventory = preflight ? parseFloat(preflight.operatorInventory) : Infinity;
   const preflightBlockers = preflight?.blockers ?? [];
+  const partyMismatchWarning = checkPartyConsistency(data, preflight);
 
   const loadEthereumBridgeData = useCallback(async () => {
     if (!CONTRACTS.BLEBridgeV9 || !ethers.isAddress(CONTRACTS.BLEBridgeV9)) {
@@ -362,6 +364,20 @@ export function CantonBridge() {
           </button>
         }
       />
+
+      {hasConnectedUserParty && (
+        <CantonIdentityStatus
+          connectedParty={activeParty}
+          effectiveParty={data?.effectiveParty || data?.party || null}
+          aliasApplied={data?.aliasApplied ?? false}
+        />
+      )}
+
+      {partyMismatchWarning && (
+        <div className="rounded-lg border border-amber-800 bg-amber-900/20 p-4 text-sm text-amber-400">
+          {partyMismatchWarning}
+        </div>
+      )}
 
       {ethBridge.paused && (
         <div className="alert-error flex items-center gap-3">

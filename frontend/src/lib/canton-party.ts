@@ -1,9 +1,16 @@
 const DEFAULT_LOCAL_PARTY_NAMESPACE =
   "122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
 
+/**
+ * @deprecated These entries map legacy participant namespaces to the local
+ * participant. Retained as a safety net for stale references. The canonical
+ * approach is server-side alias resolution via CANTON_RECIPIENT_PARTY_ALIASES.
+ * See devnet-ops-runbook.md "Canton Party Identity Policy" for details.
+ */
 const DEFAULT_LEGACY_NAMESPACE_BY_HINT: Record<string, string> = {
   "minted-user-33f97321":
     "122033f97321214b5b8443f6212a05836c8ffe42dda5000000000000000000000000",
+  // eb4e...::1220...ebad — prior participant instance, not locally submit-capable
   "eb4e4b84e7db045557f78d9b5e8c2b98":
     "12202dadec11aab8a9dc6ad790b6caab962e2c39ff419a2ae0d12e9ce6e87601ebad",
 };
