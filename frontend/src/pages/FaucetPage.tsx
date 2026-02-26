@@ -5,6 +5,7 @@ import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import { useWCContracts } from "@/hooks/useWCContracts";
 import { CONTRACTS, USDC_DECIMALS, MUSD_DECIMALS } from "@/lib/config";
 import WalletConnector from "@/components/WalletConnector";
+import { DevnetFaucetPanel } from "@/components/canton/DevnetFaucetPanel";
 
 // MockERC20 has a public mint(address, uint256)
 const MOCK_ERC20_ABI = [
@@ -339,6 +340,9 @@ export function FaucetPage() {
           );
         })}
       </div>
+
+      {/* Canton Devnet Faucet */}
+      <DevnetFaucetPanel />
 
       {/* Info Box */}
       <div className="rounded-xl border border-white/5 bg-surface-800/30 p-6">
