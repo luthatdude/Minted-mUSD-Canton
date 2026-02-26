@@ -293,6 +293,7 @@ npm run ops:topup -- --target 2000 --chunk 250 --execute --mode protocol
 |-------|--------------|-------------|
 | `NO_OPERATOR_INVENTORY` | `ops:topup -- --execute --mode protocol` | Mint operator inventory to floor |
 | `LOW_OPERATOR_INVENTORY` | `ops:topup -- --execute --mode protocol` | Top up to floor target |
+| `INSUFFICIENT_OPERATOR_INVENTORY` | `ops:topup -- --execute --mode protocol` | mUSD faucet: operator inventory too low |
 | `BELOW_MIN_AMOUNT` | None (UI bug) | Enforce min amount >= 1.0 in bridge UI |
 | `TEMPLATES_OR_INTERFACES_NOT_FOUND` | `ops:doctor` | Fix package ID in `.env.local` |
 | `COMMAND_PREPROCESSING_FAILED` | None (auto-mitigated) | Check `privacyObservers` injection in `canton-command.ts` |
@@ -351,6 +352,8 @@ DEVNET_FAUCET_COOLDOWN_SECONDS=30
 | `INVALID_INPUT` | 400 | Bad asset, amount, or party format |
 | `CONFIG_ERROR` | 500 | Canton config missing (PARTY, PACKAGE_ID) |
 | `UPSTREAM_ERROR` | 502 | Canton API command failed |
+| `INSUFFICIENT_OPERATOR_INVENTORY` | 409 | mUSD funding: operator inventory too low |
+| `UNSUPPORTED_MODE` | 400 | mUSD funding: invalid mode parameter |
 
 ### How to Use for Staking/Bridge Tests
 
@@ -373,6 +376,41 @@ curl -X POST http://localhost:3001/api/canton-devnet-faucet \
   -H "Content-Type: application/json" \
   -d '{"party":"alice::1220abc...","asset":"mUSD","amount":"50"}'
 ```
+
+### mUSD Funding on Single-Party Devnet
+
+On a single-party devnet, direct `CantonMUSD` creates fail because DAML enforces `issuer != owner`. The faucet UI automatically routes mUSD requests to a dedicated operator-mediated funding endpoint (`/api/canton-devnet-fund-musd`) that transfers mUSD from operator inventory instead of creating new tokens.
+
+**How it works:**
+1. Queries operator-owned `CantonMUSD` inventory (excluding pool-reserved CIDs)
+2. Selects inventory contracts (greedy, largest-first) to cover the requested amount
+3. Archives selected operator contracts
+4. Creates a new `CantonMUSD` owned by the target party (requested amount)
+5. Creates change `CantonMUSD` for operator (if inventory > requested)
+6. All steps execute in a single atomic Canton batch
+
+**Prerequisites:**
+- Operator must have sufficient mUSD inventory (use `ops:topup` to restore)
+- Same safety gates as the faucet (feature flag, allowlist, rate limits)
+
+**Additional error type:**
+
+| Error Type | HTTP | Meaning |
+|-----------|------|---------|
+| `INSUFFICIENT_OPERATOR_INVENTORY` | 409 | Operator mUSD balance too low — run `ops:topup` |
+| `UNSUPPORTED_MODE` | 400 | Invalid `mode` parameter (only `inventory_transfer` supported) |
+
+**API direct usage:**
+```bash
+# Fund 50 mUSD to a party via operator inventory transfer
+curl -X POST http://localhost:3001/api/canton-devnet-fund-musd \
+  -H "Content-Type: application/json" \
+  -d '{"party":"alice::1220abc...","amount":"50","mode":"inventory_transfer"}'
+```
+
+**Response includes:**
+- `inventoryConsumed`: number of operator contracts consumed
+- `inventoryRemaining`: operator mUSD balance after transfer
 
 ### Disabling the Faucet
 

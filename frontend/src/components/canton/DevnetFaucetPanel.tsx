@@ -12,8 +12,12 @@ import {
  *   1. Loop wallet party is connected
  *   2. NEXT_PUBLIC_ENABLE_DEVNET_FAUCET=true
  *
- * Uses the /api/canton-devnet-faucet endpoint which enforces server-side
- * safety gates (env flag, allowlist, rate limit, daily cap).
+ * Routing:
+ *   - mUSD → /api/canton-devnet-fund-musd (operator-mediated inventory transfer)
+ *   - CTN, USDC, USDCx → /api/canton-devnet-faucet (direct create)
+ *
+ * Both endpoints enforce server-side safety gates
+ * (env flag, allowlist, rate limit, daily cap).
  */
 
 type FaucetAsset = "mUSD" | "CTN" | "USDC" | "USDCx";
@@ -25,13 +29,15 @@ interface FaucetState {
   errorType: string | null;
   remainingDailyCap: string | null;
   nextAllowedAt: string | null;
+  inventoryAvailable: string | null;
+  inventoryRemaining: string | null;
 }
 
 const CANTON_ASSETS: { key: FaucetAsset; label: string; description: string; defaultAmount: string; gradient: string }[] = [
   {
     key: "mUSD",
     label: "Canton mUSD",
-    description: "CantonMUSD token for staking into smUSD pools",
+    description: "Operator-mediated test funding — transfers from operator inventory",
     defaultAmount: "100",
     gradient: "from-brand-500 to-purple-500",
   },
@@ -87,28 +93,38 @@ export function DevnetFaucetPanel() {
 
     setStates((s) => ({
       ...s,
-      [asset]: { loading: true, success: null, error: null, errorType: null, remainingDailyCap: null, nextAllowedAt: null },
+      [asset]: { loading: true, success: null, error: null, errorType: null, remainingDailyCap: null, nextAllowedAt: null, inventoryAvailable: null, inventoryRemaining: null },
     }));
 
     try {
-      const resp = await fetch("/api/canton-devnet-faucet", {
+      // Route mUSD to operator-mediated funding endpoint; others to direct faucet
+      const isMuSD = asset === "mUSD";
+      const endpoint = isMuSD ? "/api/canton-devnet-fund-musd" : "/api/canton-devnet-faucet";
+      const body = isMuSD
+        ? { party: activeParty, amount, mode: "inventory_transfer" }
+        : { party: activeParty, asset, amount };
+
+      const resp = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ party: activeParty, asset, amount }),
+        body: JSON.stringify(body),
       });
 
       const data = await resp.json();
 
       if (data.success) {
+        const label = isMuSD ? "Funded" : "Minted";
         setStates((s) => ({
           ...s,
           [asset]: {
             loading: false,
-            success: `Minted ${fmtAmount(data.amount)} ${asset} (tx: ${data.txId?.slice(0, 20)}...)`,
+            success: `${label} ${fmtAmount(data.amount)} ${asset} (tx: ${data.txId?.slice(0, 20)}...)`,
             error: null,
             errorType: null,
             remainingDailyCap: data.remainingDailyCap || null,
             nextAllowedAt: data.nextAllowedAt || null,
+            inventoryAvailable: null,
+            inventoryRemaining: data.inventoryRemaining || null,
           },
         }));
         // Refresh balances + preflight after successful mint
@@ -126,6 +142,8 @@ export function DevnetFaucetPanel() {
             errorType: data.errorType || null,
             remainingDailyCap: data.remainingDailyCap || null,
             nextAllowedAt: data.nextAllowedAt || null,
+            inventoryAvailable: data.inventoryAvailable || null,
+            inventoryRemaining: null,
           },
         }));
       }
@@ -133,7 +151,7 @@ export function DevnetFaucetPanel() {
       const message = err instanceof Error ? err.message : String(err);
       setStates((s) => ({
         ...s,
-        [asset]: { loading: false, success: null, error: message, errorType: "NETWORK_ERROR", remainingDailyCap: null, nextAllowedAt: null },
+        [asset]: { loading: false, success: null, error: message, errorType: "NETWORK_ERROR", remainingDailyCap: null, nextAllowedAt: null, inventoryAvailable: null, inventoryRemaining: null },
       }));
     }
   }, [activeParty, amounts, refresh]);
@@ -163,7 +181,7 @@ export function DevnetFaucetPanel() {
 
       {/* Asset faucet cards */}
       {CANTON_ASSETS.map((asset) => {
-        const state = states[asset.key] || { loading: false, success: null, error: null, errorType: null, remainingDailyCap: null, nextAllowedAt: null };
+        const state = states[asset.key] || { loading: false, success: null, error: null, errorType: null, remainingDailyCap: null, nextAllowedAt: null, inventoryAvailable: null, inventoryRemaining: null };
 
         return (
           <div key={asset.key} className="rounded-xl border border-white/10 bg-surface-800/50 p-5">
@@ -203,22 +221,25 @@ export function DevnetFaucetPanel() {
                 {state.loading ? (
                   <>
                     <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                    Minting...
+                    {asset.key === "mUSD" ? "Funding..." : "Minting..."}
                   </>
                 ) : (
-                  <>Mint {asset.key}</>
+                  <>{asset.key === "mUSD" ? "Fund" : "Mint"} {asset.key}</>
                 )}
               </button>
             </div>
 
             {/* Quota info */}
-            {(state.remainingDailyCap || state.nextAllowedAt) && (
-              <div className="mt-2 flex gap-4 text-xs text-gray-500">
+            {(state.remainingDailyCap || state.nextAllowedAt || state.inventoryRemaining) && (
+              <div className="mt-2 flex flex-wrap gap-4 text-xs text-gray-500">
                 {state.remainingDailyCap && (
                   <span>Daily cap remaining: {fmtAmount(state.remainingDailyCap)}</span>
                 )}
                 {state.nextAllowedAt && (
                   <span>Next allowed: {new Date(state.nextAllowedAt).toLocaleTimeString()}</span>
+                )}
+                {state.inventoryRemaining && (
+                  <span>Operator inventory: {fmtAmount(state.inventoryRemaining)} mUSD</span>
                 )}
               </div>
             )}
@@ -235,6 +256,11 @@ export function DevnetFaucetPanel() {
               <div className="mt-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
                 <span className="font-medium">{state.errorType ? `[${state.errorType}] ` : ""}</span>
                 {state.error}
+                {state.errorType === "INSUFFICIENT_OPERATOR_INVENTORY" && state.inventoryAvailable && (
+                  <span className="block mt-1 text-xs text-red-400/70">
+                    Available operator inventory: {fmtAmount(state.inventoryAvailable)} mUSD
+                  </span>
+                )}
               </div>
             )}
           </div>
