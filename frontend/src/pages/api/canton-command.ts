@@ -60,6 +60,8 @@ function buildTemplateMap(): Record<string, string> {
     CantonDebtPosition:      `${pkgId}:CantonLending:CantonDebtPosition`,
     // CantonCoinToken module
     CantonCoin:              `${pkgId}:CantonCoinToken:CantonCoin`,
+    // CantonCoinMint module
+    CoinMintService:         `${pkgId}:CantonCoinMint:CoinMintService`,
     // Minted.Protocol.V3 module
     BridgeService:           `${pkgId}:Minted.Protocol.V3:BridgeService`,
     MUSDSupplyService:       `${pkgId}:Minted.Protocol.V3:MUSDSupplyService`,

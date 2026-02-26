@@ -136,6 +136,7 @@ interface BalancesResponse {
   lendingService: LendingServiceInfo | null;
   priceFeeds: PriceFeedInfo[];
   directMintService: { contractId: string; paused: boolean; serviceName?: string; hasValidCompliance?: boolean } | null;
+  coinMintService: { contractId: string; cantonCoinPrice: string } | null;
   smusdTokens: SimpleToken[];
   totalSmusd: string;
   smusdETokens: SimpleToken[];
@@ -297,6 +298,7 @@ export default async function handler(
       templateId("CantonCoinToken", "CantonCoin"),
       templateId("CantonDirectMint", "CantonUSDC"),
       templateId("CantonDirectMint", "USDCx"),
+      templateId("CantonCoinMint", "CoinMintService"),
     ] as const;
 
     const entryGroups = await Promise.all(
@@ -315,6 +317,7 @@ export default async function handler(
     let boostPoolService: BoostPoolServiceInfo | null = null;
     let lendingService: LendingServiceInfo | null = null;
     let directMintService: { contractId: string; paused: boolean; serviceName?: string; hasValidCompliance?: boolean } | null = null;
+    let coinMintService: { contractId: string; cantonCoinPrice: string } | null = null;
     let stakingHasValidCompliance = false;
     const smusdTokens: SimpleToken[] = [];
     const smusdETokens: SimpleToken[] = [];
@@ -562,6 +565,12 @@ export default async function handler(
           amount: (p.amount as string) || "0",
           template: "USDCx",
         });
+      } else if (entityName === "CoinMintService") {
+        const p = evt.createArgument;
+        coinMintService = {
+          contractId: evt.contractId,
+          cantonCoinPrice: (p.cantonCoinPrice as string) || "0",
+        };
       }
     }
 
@@ -572,6 +581,7 @@ export default async function handler(
       effectiveParty !== CANTON_PARTY &&
       (
         !directMintService ||
+        !coinMintService ||
         !bridgeService ||
         !supplyService ||
         !stakingService ||
@@ -585,6 +595,7 @@ export default async function handler(
           templateId("Minted.Protocol.V3", "BridgeService"),
           templateId("Minted.Protocol.V3", "MUSDSupplyService"),
           templateId("CantonDirectMint", "CantonDirectMintService"),
+          templateId("CantonCoinMint", "CoinMintService"),
           templateId("CantonSMUSD", "CantonStakingService"),
           templateId("CantonETHPool", "CantonETHPoolService"),
           templateId("CantonBoostPool", "CantonBoostPoolService"),
@@ -727,6 +738,12 @@ export default async function handler(
             ) {
               directMintService = candidate;
             }
+          } else if (!coinMintService && entityName === "CoinMintService") {
+            const p = evt.createArgument;
+            coinMintService = {
+              contractId: evt.contractId,
+              cantonCoinPrice: (p.cantonCoinPrice as string) || "0",
+            };
           }
         }
       } catch (fallbackErr) {
@@ -765,6 +782,7 @@ export default async function handler(
       lendingService,
       priceFeeds,
       directMintService,
+      coinMintService,
       smusdTokens,
       totalSmusd,
       smusdETokens,

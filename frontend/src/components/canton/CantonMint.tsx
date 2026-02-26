@@ -114,13 +114,18 @@ export function CantonMint() {
           fresh.party, "CantonCoin", "CantonCoin_Split", freshCoins, parsed,
           (r) => r.cantonCoinTokens || [], "CantonCoin"
         );
-        // CoinMintService — source from operator data if needed
+        // CoinMintService — source from operator data (operator-deployed service)
         const operatorFresh = await fetchFreshBalances(null).catch(() => null);
-        const coinSvc = operatorFresh?.directMintService || freshService;
-        if (!coinSvc) throw new Error("CantonCoin minting service is not configured on this network");
+        const coinSvc = fresh.coinMintService || operatorFresh?.coinMintService || null;
+        if (!coinSvc) throw new Error("CoinMintService is not deployed on this Canton network. Contact the operator.");
+
+        // Operator must provide USDCx backing for the coin swap
+        const operatorUsdcx = (operatorFresh?.usdcTokens || []).filter(t => t.template === "USDCx");
+        const largestUsdcx = operatorUsdcx.sort((a, b) => parseFloat(b.amount || "0") - parseFloat(a.amount || "0"))[0];
+        if (!largestUsdcx) throw new Error("No operator USDCx backing available for CantonCoin mint. The operator must maintain a USDCx pool.");
 
         const resp = await cantonExercise("CoinMintService", coinSvc.contractId, "MintMusdWithCoin", {
-          user: fresh.party, coinCid: token.contractId,
+          user: fresh.party, coinCid: token.contractId, operatorUsdcxCid: largestUsdcx.contractId,
         }, { party: fresh.party });
         if (!resp.success) throw new Error(resp.error || "Coin mint failed");
       }
@@ -318,7 +323,7 @@ export function CantonMint() {
                   : musdTokens.length} contracts
               </span>
             </div>
-            {tab === "mint" && mintAsset === "CANTON_COIN" && !directMintService && (
+            {tab === "mint" && mintAsset === "CANTON_COIN" && !data?.coinMintService && (
               <>
                 <div className="divider my-2" />
                 <p className="text-xs text-amber-300">

@@ -110,6 +110,7 @@ export interface CantonBalancesData {
   lendingService: LendingServiceInfo | null;
   priceFeeds: PriceFeedInfo[];
   directMintService: { contractId: string; paused: boolean } | null;
+  coinMintService: { contractId: string; cantonCoinPrice: string } | null;
   smusdTokens: SimpleToken[];
   totalSmusd: string;
   smusdETokens: SimpleToken[];
