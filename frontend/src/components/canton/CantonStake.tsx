@@ -77,20 +77,24 @@ export function CantonStake() {
   const [txError, setTxError] = useState<string | null>(null);
   const [txSuccess, setTxSuccess] = useState<string | null>(null);
   const [preflight, setPreflight] = useState<BridgePreflightData | null>(null);
+  const [preflightStale, setPreflightStale] = useState(false);
 
   const loadPreflight = useCallback(async () => {
     if (!activeParty) return;
+    setPreflightStale(false);
     try {
       const pf = await fetchBridgePreflight(activeParty);
       setPreflight(pf);
     } catch {
-      // Non-critical — CIP-56 balance just won't appear in UI gating
+      setPreflightStale(true);
     }
   }, [activeParty]);
 
+  // Refresh preflight on party change and on ledger data refresh
+  const ledgerOffset = data?.ledgerOffset;
   useEffect(() => {
     void loadPreflight();
-  }, [loadPreflight]);
+  }, [loadPreflight, ledgerOffset]);
 
   const totalMusd = data ? parseFloat(data.totalBalance) : 0;
   const tokens = data?.tokens || [];
@@ -111,7 +115,9 @@ export function CantonStake() {
   // CIP-56 native funding: available via preflight
   const cip56Musd = preflight ? parseFloat(preflight.userCip56Balance) : 0;
   const totalStakeFunding = totalMusd + cip56Musd;
-  const hasStakeFunding = tokens.length > 0 || cip56Musd > 0;
+  const hasRedeemableMusd = totalMusd > EPSILON;
+  const hasConvertibleCip56 = cip56Musd > EPSILON;
+  const hasStakeFunding = hasConnectedUserParty && (hasRedeemableMusd || hasConvertibleCip56);
 
   // Filter USDC vs USDCx for proper routing
   const pureUsdcTokens = usdcTokens.filter(t => t.template !== "USDCx");
@@ -202,7 +208,7 @@ export function CantonStake() {
         if (nativeResult.success) {
           console.log("[CantonStake] Native stake succeeded:", nativeResult.commandId);
           setTxSuccess(`Staked ${fmtAmount(parsedAmount)} mUSD → smUSD shares (native CIP-56 path)`);
-          setAmount(""); await refresh();
+          setAmount(""); await refresh(); void loadPreflight();
           return;
         }
         // Native failed — surface error to user (hybrid fallback decommissioned)
@@ -226,7 +232,7 @@ export function CantonStake() {
       }, { party: fresh.party });
       if (!resp.success) throw new Error(resp.error || "Stake failed");
       setTxSuccess(`Staked ${fmtAmount(parsedAmount)} mUSD → smUSD shares`);
-      setAmount(""); await refresh();
+      setAmount(""); await refresh(); void loadPreflight();
     } catch (err: any) { setTxError(err.message); }
     finally { setTxLoading(false); }
   }
@@ -252,7 +258,7 @@ export function CantonStake() {
       }, { party: fresh.party });
       if (!resp.success) throw new Error(resp.error || "Unstake failed");
       setTxSuccess(`Unstaked ${fmtAmount(smusd.amount)} smUSD → mUSD`);
-      await refresh();
+      await refresh(); void loadPreflight();
     } catch (err: any) { setTxError(err.message); }
     finally { setTxLoading(false); }
   }
@@ -601,9 +607,19 @@ export function CantonStake() {
                           </TxButton>
                         </>
                       ) : (
-                        <div className="text-center py-12">
-                          <p className="text-gray-400 font-medium">No mUSD tokens available</p>
-                          <p className="text-sm text-gray-500 mt-1">Bridge mUSD from Ethereum or mint CIP-56 tokens first</p>
+                        <div className="text-center py-12 space-y-2">
+                          {!hasConnectedUserParty ? (
+                            <>
+                              <p className="text-gray-400 font-medium">Connect Loop wallet to stake</p>
+                              <p className="text-sm text-gray-500">Connect your Loop wallet to view your Canton balances and stake mUSD.</p>
+                            </>
+                          ) : (
+                            <>
+                              <p className="text-gray-400 font-medium">No stakeable mUSD balance found</p>
+                              <p className="text-sm text-gray-500">Redeemable mUSD: {fmtAmount(totalMusd)} &middot; CIP-56 convertible: {fmtAmount(cip56Musd)}{preflightStale ? " (stale)" : ""}</p>
+                              <p className="text-sm text-gray-500">Bridge mUSD from Ethereum or mint CIP-56 tokens to stake.</p>
+                            </>
+                          )}
                         </div>
                       )
                     ) : (
@@ -752,7 +768,7 @@ export function CantonStake() {
                           </div>
                         </div>
                         {/* Amount Input */}
-                        {selectedDepositTokens.length > 0 ? (
+                        {hasConnectedUserParty && selectedDepositTokens.length > 0 ? (
                           <div className="space-y-3">
                             <div className="flex items-center justify-between">
                               <label className="text-sm font-medium text-gray-400">Deposit Amount</label>
@@ -783,11 +799,20 @@ export function CantonStake() {
                           </div>
                         ) : (
                           <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-4 text-center">
-                            <p className="text-sm text-gray-400">No {depositAsset} tokens available on Canton</p>
+                            {!hasConnectedUserParty ? (
+                              <p className="text-sm text-gray-400">Connect Loop wallet to view {depositAsset} balances and stake.</p>
+                            ) : (
+                              <>
+                                <p className="text-sm text-gray-400">No {depositAsset} contracts found for this party.</p>
+                                <p className="text-xs text-gray-500 mt-1">
+                                  {depositAsset === "CTN" ? "Acquire CantonCoin via the faucet or bridge." : depositAsset === "USDCx" ? "Bridge USDCx from Ethereum or convert USDC." : "Bridge USDC from Ethereum to get started."}
+                                </p>
+                              </>
+                            )}
                           </div>
                         )}
-                        <TxButton onClick={handleEthPoolStake} loading={txLoading} disabled={selectedDepositTokens.length === 0 || parsedAmount <= 0} className="w-full">
-                          Stake {depositAsset} → smUSD-E
+                        <TxButton onClick={handleEthPoolStake} loading={txLoading} disabled={!hasConnectedUserParty || selectedDepositTokens.length === 0 || parsedAmount <= 0} className="w-full">
+                          {!hasConnectedUserParty ? "Connect Loop Wallet" : `Stake ${depositAsset} → smUSD-E`}
                         </TxButton>
                       </>
                     ) : (
@@ -939,7 +964,7 @@ export function CantonStake() {
 
                   <div className="space-y-6 p-6">
                     {tab === "stake" ? (
-                      coinTokens.length > 0 ? (
+                      hasConnectedUserParty && coinTokens.length > 0 ? (
                         <>
                           <div className="space-y-3">
                             <div className="flex items-center justify-between">
@@ -988,14 +1013,23 @@ export function CantonStake() {
                               <span className="text-white font-medium">{parseFloat(boostPoolService.cantonPriceMusd).toFixed(4)} mUSD</span>
                             </div>
                           </div>
-                          <TxButton onClick={handleBoostDeposit} loading={txLoading} disabled={coinTokens.length === 0 || smusdTokens.length === 0 || parsedAmount <= 0} className="w-full">
-                            Deposit CTN \u2192 Boost LP
+                          <TxButton onClick={handleBoostDeposit} loading={txLoading} disabled={!hasConnectedUserParty || coinTokens.length === 0 || smusdTokens.length === 0 || parsedAmount <= 0} className="w-full">
+                            Deposit CTN &#x2192; Boost LP
                           </TxButton>
                         </>
                       ) : (
                         <div className="text-center py-12">
-                          <p className="text-gray-400 font-medium">No Canton Coin available</p>
-                          <p className="text-sm text-gray-500 mt-1">You need CTN tokens to deposit into the Boost Pool</p>
+                          {!hasConnectedUserParty ? (
+                            <>
+                              <p className="text-gray-400 font-medium">Connect Loop wallet to deposit</p>
+                              <p className="text-sm text-gray-500 mt-1">Connect your Loop wallet to view CTN balances and deposit into the Boost Pool.</p>
+                            </>
+                          ) : (
+                            <>
+                              <p className="text-gray-400 font-medium">No Canton Coin available</p>
+                              <p className="text-sm text-gray-500 mt-1">You need CTN tokens to deposit into the Boost Pool.</p>
+                            </>
+                          )}
                         </div>
                       )
                     ) : (
