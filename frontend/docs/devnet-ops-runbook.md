@@ -392,6 +392,7 @@ On a single-party devnet, direct `CantonMUSD` creates fail because DAML enforces
 **Prerequisites:**
 - Operator must have sufficient mUSD inventory (use `ops:topup` to restore)
 - Same safety gates as the faucet (feature flag, allowlist, rate limits)
+- **Target party must be `isLocal=true` on the Canton participant** — CantonMUSD has `signatory issuer, owner`, so both parties must have submitter authority on the synchronizer
 
 **Additional error type:**
 
