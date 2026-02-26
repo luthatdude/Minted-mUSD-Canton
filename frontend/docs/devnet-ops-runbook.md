@@ -100,6 +100,32 @@ npm run ops:canary:force-conversion
 
 **When to use:** Daily monitoring, CI/CD gates, or any time `--require-conversion` fails due to pre-existing redeemable balance.
 
+### 4. Expected Policy-Block Behavior (Fallback Disabled)
+
+When hybrid fallback is disabled (`CANTON_HYBRID_FALLBACK_ENABLED=false` or `--no-fallback`), force-conversion probes are expected to be blocked by policy. The canary reports `EXPECTED_BLOCKED_BY_POLICY` instead of `FAIL`:
+
+```bash
+npm run ops:canary:force-conversion:no-fallback
+# equivalent to: npm run ops:canary -- --force-conversion-probe --no-fallback --execute
+```
+
+**Canary behavior table:**
+
+| Mode | Fallback Enabled | Expected Verdict |
+|------|-----------------|-----------------|
+| native | off | `PASS` — native path needs no conversion |
+| native | on | `PASS` — normal operation |
+| force-conversion | off | `EXPECTED_BLOCKED_BY_POLICY` — conversion blocked by policy |
+| force-conversion | on | `PASS` — conversion and redeem succeed |
+
+**Output fields:** Every canary run emits a structured `[canary:result]` JSON line containing:
+- `mode`: `"native"` or `"force-conversion"`
+- `fallbackEnabled`: `true` or `false`
+- `verdict`: `"PASS"`, `"FAIL"`, or `"EXPECTED_BLOCKED_BY_POLICY"`
+- `assertions`: full assertion array
+
+**Important:** `EXPECTED_BLOCKED_BY_POLICY` is a clean exit (exit code 0). CI/CD gates should treat it as a pass when fallback is intentionally disabled.
+
 ## Recovery Flows
 
 ### Topup: Operator Inventory Below Floor
@@ -208,6 +234,7 @@ npm run ops:topup -- --target 2000 --chunk 250 --execute --mode protocol
 | `NEXT_PUBLIC_DAML_PACKAGE_ID` | ble-protocol package (CantonDirectMint, etc.) | `eff3bf30...` |
 | `NEXT_PUBLIC_CIP56_PACKAGE_ID` | ble-protocol-cip56 package (CIP-56 interfaces) | `11347710...` |
 | `CANTON_OPERATOR_INVENTORY_FLOOR` | Health check floor target (mUSD) | `2000` |
+| `CANTON_HYBRID_FALLBACK_ENABLED` | Enable/disable hybrid conversion fallback | `true` (default) |
 | `CANTON_CANARY_PARTY` | Default party for ops scripts | `minted-canary::1220...` |
 
 ## Script Reference
@@ -220,6 +247,8 @@ npm run ops:topup -- --target 2000 --chunk 250 --execute --mode protocol
 | `npm run ops:topup -- [flags]` | Top up operator inventory | Dry-run (requires `--execute`) |
 | `npm run ops:canary -- [flags]` | E2E bridge path validation | Dry-run (requires `--execute`) |
 | `npm run ops:canary:force-conversion` | Deterministic conversion + redeem probe | Always executes (force mode) |
+| `npm run ops:canary:native` | Native-mode bridge validation | Always executes |
+| `npm run ops:canary:force-conversion:no-fallback` | Force-conversion with fallback disabled | Expects policy block (exit 0) |
 | `npm run typecheck:scripts` | Type-check ops scripts | Read-only |
 
 ## Failure Signature Quick Map

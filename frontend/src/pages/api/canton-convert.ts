@@ -126,12 +126,22 @@ async function queryActiveContracts(
   }
 }
 
+const HYBRID_FALLBACK_ENABLED = process.env.ENABLE_HYBRID_FALLBACK === "true";
+
 // ── Main handler ───────────────────────────────────────────
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
   if (!guardMethod(req, res, "POST")) return;
+
+  if (!HYBRID_FALLBACK_ENABLED) {
+    return res.status(403).json({
+      success: false,
+      error: "Legacy CIP-56 conversion is disabled. Native CIP-56 flows are the default. Set ENABLE_HYBRID_FALLBACK=true to re-enable.",
+      errorType: "HYBRID_DISABLED",
+    });
+  }
 
   const configError = validateConfig();
   if (configError) {

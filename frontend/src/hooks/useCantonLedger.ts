@@ -339,8 +339,8 @@ export async function convertCip56ToRedeemable(
  *
  * Returns { success, mode: "native", redeemAmount, feeEstimate, netAmount, commandId }
  * on success, or { success: false, error, mode: "native" } on failure.
- * Callers should fall back to the hybrid flow (convertCip56ToRedeemable + DirectMint_Redeem)
- * if this fails.
+ * Callers should NOT fall back to hybrid unless NEXT_PUBLIC_ENABLE_HYBRID_FALLBACK=true.
+ * Default behavior: native failure surfaces to the user.
  */
 export async function nativeCip56Redeem(
   party: string,
@@ -380,8 +380,8 @@ export async function nativeCip56Redeem(
  *
  * Returns { success, mode: "native", repayAmount, commandId }
  * on success, or { success: false, error, mode: "native" } on failure.
- * Callers should fall back to the hybrid flow (convertCip56ToRedeemable + Lending_Repay)
- * if this fails with an infra error (5xx/409).
+ * Callers should NOT fall back to hybrid unless NEXT_PUBLIC_ENABLE_HYBRID_FALLBACK=true.
+ * Default behavior: native failure surfaces to the user.
  */
 export async function nativeCip56Repay(
   party: string,
@@ -419,8 +419,8 @@ export async function nativeCip56Repay(
  *
  * Returns { success, mode: "native", stakeAmount, commandId }
  * on success, or { success: false, error, mode: "native" } on failure.
- * Callers should fall back to the hybrid flow (convertCip56ToRedeemable + Stake)
- * if this fails with an infra error (5xx/409).
+ * Callers should NOT fall back to hybrid unless NEXT_PUBLIC_ENABLE_HYBRID_FALLBACK=true.
+ * Default behavior: native failure surfaces to the user.
  */
 export async function nativeCip56Stake(
   party: string,

@@ -13,6 +13,7 @@ import {
   type CantonBalancesData,
   type SimpleToken,
 } from "@/hooks/useCantonLedger";
+import { HYBRID_FALLBACK_ENABLED } from "@/lib/api-hardening/fallback";
 
 type CantonPoolTab = "smusd" | "ethpool" | "boostpool";
 type StakeAction = "stake" | "unstake";
@@ -185,16 +186,16 @@ export function CantonStake() {
           setAmount(""); await refresh();
           return;
         }
-        // Infra errors (409 inventory / 5xx) fall through to hybrid; everything else surfaces
+        // Infra errors (409 inventory / 5xx) fall through to hybrid only when explicitly enabled
         const status = nativeResult.httpStatus ?? 0;
-        if (status === 409 || (status >= 500 && status < 600)) {
+        if ((status === 409 || (status >= 500 && status < 600)) && HYBRID_FALLBACK_ENABLED) {
           console.warn("[CantonStake] Native stake infra error, falling back to hybrid:", nativeResult.error);
         } else {
-          throw new Error(nativeResult.error || "Stake rejected");
+          throw new Error(nativeResult.error || "Native CIP-56 stake failed. Hybrid fallback is disabled.");
         }
       }
 
-      // ── HYBRID FALLBACK PATH ──────────────────────────────────
+      // ── HYBRID FALLBACK PATH (emergency only, requires NEXT_PUBLIC_ENABLE_HYBRID_FALLBACK=true) ──
       // Auto-convert CIP-56 → CantonMUSD if user doesn't have enough legacy tokens
       let freshTokens = fresh.tokens || [];
       const redeemableTotal = freshTokens.reduce((s, t) => s + parseFloat(t.amount || "0"), 0);
