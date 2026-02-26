@@ -8,6 +8,19 @@ Operational procedures for maintaining the Minted mUSD Canton devnet bridge infr
 - Canton participant node accessible (default: `localhost:7575`)
 - Environment configured: `.env.local` with `CANTON_PARTY`, `NEXT_PUBLIC_DAML_PACKAGE_ID`, `NEXT_PUBLIC_CIP56_PACKAGE_ID`
 
+### Build & Dev Server Concurrency
+
+Do not run `npm run build` and `next dev` concurrently. Running a production build while the dev server is active corrupts the `.next/` compilation cache, causing all API routes to return HTML 500 error pages.
+
+After running `npm run build`, always restart the dev server:
+
+```bash
+# Kill the running dev server, then:
+npm run dev -- -p 3001
+```
+
+Wait for the server to report "Ready" before running API or canary checks.
+
 ## Daily Verify (One Command)
 
 Run the full verification suite in one command:
@@ -125,6 +138,29 @@ npm run ops:canary:force-conversion:no-fallback
 - `assertions`: full assertion array
 
 **Important:** `EXPECTED_BLOCKED_BY_POLICY` is a clean exit (exit code 0). CI/CD gates should treat it as a pass when fallback is intentionally disabled.
+
+## 24h Post-Release Stability Check
+
+Run after any migration merge to confirm operational stability over 24 hours.
+
+```bash
+npm run ops:check24h
+```
+
+This runs `ops:doctor` followed by the native canary in sequence.
+
+**Pass criteria:**
+- `ops:doctor`: all checks PASS, HEALTHY=true
+- `ops:canary:native`: verdict=PASS, redeem_success=PASS
+
+**Schedule:** Run at T+1h, T+4h, T+24h after merge.
+
+**On failure:**
+1. Run `npm run ops:doctor` independently to isolate the failing check.
+2. If API checks fail: verify dev server is running (`curl http://localhost:3001`). Restart if needed.
+3. If health checks fail: run `npm run ops:topup -- --target 2000 --chunk 250 --execute --mode protocol`.
+4. If canary fails: check `[canary:result]` JSON for the specific assertion failure.
+5. If all else fails: revert the migration merge (`git revert <sha>`) and investigate.
 
 ## Recovery Flows
 
@@ -260,3 +296,46 @@ npm run ops:topup -- --target 2000 --chunk 250 --execute --mode protocol
 | `BELOW_MIN_AMOUNT` | None (UI bug) | Enforce min amount >= 1.0 in bridge UI |
 | `TEMPLATES_OR_INTERFACES_NOT_FOUND` | `ops:doctor` | Fix package ID in `.env.local` |
 | `COMMAND_PREPROCESSING_FAILED` | None (auto-mitigated) | Check `privacyObservers` injection in `canton-command.ts` |
+
+## Legacy Decommission Plan
+
+Remaining hybrid/fallback code to remove after confirming native-only stability.
+
+### Emergency Fallback Flags
+
+| Flag | Location | Purpose | Status |
+|------|----------|---------|--------|
+| `ENABLE_HYBRID_FALLBACK` | `.env.local`, `canton-convert.ts` | Re-enable CIP-56→redeemable conversion | OFF (disabled) |
+| `CANTON_HYBRID_FALLBACK_ENABLED` | `.env.local`, canary scripts | Canary fallback detection | OFF (disabled) |
+| `--fallback-enabled` | canary CLI flag | Override fallback for testing | Available |
+
+### Cleanup Criteria
+
+Remove dead hybrid code when ALL conditions are met:
+1. Native-only mode has run stable for >= 7 days (no conversion-related incidents)
+2. `ops:check24h` passes at T+24h, T+72h, T+7d post-merge
+3. No operator reports of failed native CIP-56 operations
+4. Team sign-off on permanent removal
+
+### What to Remove
+
+- `frontend/src/lib/api-hardening/fallback.ts` — hybrid fallback classification logic
+- `frontend/src/pages/api/canton-convert.ts` — conversion endpoint (or gate permanently)
+- `ENABLE_HYBRID_FALLBACK` env references in all API routes
+- Canary `--no-fallback` / `--fallback-enabled` flags (simplify to native-only)
+- `ops:canary:force-conversion` and `ops:canary:force-conversion:no-fallback` scripts
+
+### Rollback Strategy (While Flags Remain)
+
+To re-enable hybrid conversion in an emergency:
+
+```bash
+# In .env.local:
+ENABLE_HYBRID_FALLBACK=true
+CANTON_HYBRID_FALLBACK_ENABLED=true
+
+# Restart dev server, then verify:
+npm run ops:canary:force-conversion
+```
+
+The conversion path remains functional — only the policy gate is disabled. Re-enabling is a config change, not a code change.
