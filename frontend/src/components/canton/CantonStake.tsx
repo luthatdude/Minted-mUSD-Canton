@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
 import { TxButton } from "@/components/TxButton";
@@ -9,6 +9,7 @@ import {
   fetchFreshBalances,
   fetchBridgePreflight,
   nativeCip56Stake,
+  type BridgePreflightData,
   type CantonBalancesData,
   type SimpleToken,
 } from "@/hooks/useCantonLedger";
@@ -75,6 +76,21 @@ export function CantonStake() {
   const [txLoading, setTxLoading] = useState(false);
   const [txError, setTxError] = useState<string | null>(null);
   const [txSuccess, setTxSuccess] = useState<string | null>(null);
+  const [preflight, setPreflight] = useState<BridgePreflightData | null>(null);
+
+  const loadPreflight = useCallback(async () => {
+    if (!activeParty) return;
+    try {
+      const pf = await fetchBridgePreflight(activeParty);
+      setPreflight(pf);
+    } catch {
+      // Non-critical — CIP-56 balance just won't appear in UI gating
+    }
+  }, [activeParty]);
+
+  useEffect(() => {
+    void loadPreflight();
+  }, [loadPreflight]);
 
   const totalMusd = data ? parseFloat(data.totalBalance) : 0;
   const tokens = data?.tokens || [];
@@ -91,6 +107,11 @@ export function CantonStake() {
   const totalUsdc = data?.totalUsdc ? parseFloat(data.totalUsdc) : 0;
   const coinTokens = data?.cantonCoinTokens || [];
   const totalCoin = data?.totalCoin ? parseFloat(data.totalCoin) : 0;
+
+  // CIP-56 native funding: available via preflight
+  const cip56Musd = preflight ? parseFloat(preflight.userCip56Balance) : 0;
+  const totalStakeFunding = totalMusd + cip56Musd;
+  const hasStakeFunding = tokens.length > 0 || cip56Musd > 0;
 
   // Filter USDC vs USDCx for proper routing
   const pureUsdcTokens = usdcTokens.filter(t => t.template !== "USDCx");
@@ -497,12 +518,12 @@ export function CantonStake() {
 
                   <div className="space-y-6 p-6">
                     {tab === "stake" ? (
-                      tokens.length > 0 ? (
+                      hasStakeFunding ? (
                         <>
                           <div className="space-y-3">
                             <div className="flex items-center justify-between">
                               <label className="text-sm font-medium text-gray-400">You Stake</label>
-                              <span className="text-xs text-gray-500">Balance: {fmtAmount(totalMusd)} mUSD</span>
+                              <span className="text-xs text-gray-500">Balance: {fmtAmount(totalStakeFunding)} mUSD{cip56Musd > 0 && tokens.length > 0 ? " (incl. CIP-56)" : cip56Musd > 0 ? " (CIP-56)" : ""}</span>
                             </div>
                             <div className="relative rounded-xl border border-white/10 bg-surface-800/50 p-4 transition-all duration-300 focus-within:border-emerald-500/50 focus-within:shadow-[0_0_20px_-5px_rgba(16,185,129,0.3)]">
                               <div className="flex items-center gap-4">
@@ -516,7 +537,7 @@ export function CantonStake() {
                                 <div className="flex items-center gap-2">
                                   <button
                                     className="rounded-lg bg-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-400 transition-colors hover:bg-emerald-500/30"
-                                    onClick={() => setAmount(toInputAmount(totalMusd))}
+                                    onClick={() => setAmount(toInputAmount(totalStakeFunding))}
                                   >
                                     MAX
                                   </button>
@@ -572,7 +593,7 @@ export function CantonStake() {
                               <span className="text-gray-300">{fmtAmount(stakingService?.minDeposit || "0.01")} mUSD</span>
                             </div>
                           </div>
-                          <TxButton onClick={handleSmusdStake} loading={txLoading} disabled={tokens.length === 0 || parsedAmount <= 0} className="w-full">
+                          <TxButton onClick={handleSmusdStake} loading={txLoading} disabled={!hasStakeFunding || parsedAmount <= 0} className="w-full">
                             <span className="flex items-center justify-center gap-2">
                               <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" /></svg>
                               Stake mUSD → smUSD
@@ -582,7 +603,7 @@ export function CantonStake() {
                       ) : (
                         <div className="text-center py-12">
                           <p className="text-gray-400 font-medium">No mUSD tokens available</p>
-                          <p className="text-sm text-gray-500 mt-1">Bridge mUSD from Ethereum first</p>
+                          <p className="text-sm text-gray-500 mt-1">Bridge mUSD from Ethereum or mint CIP-56 tokens first</p>
                         </div>
                       )
                     ) : (
