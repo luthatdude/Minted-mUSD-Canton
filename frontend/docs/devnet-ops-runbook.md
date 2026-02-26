@@ -12,14 +12,40 @@ Operational procedures for maintaining the Minted mUSD Canton devnet bridge infr
 
 Do not run `npm run build` and `next dev` concurrently. Running a production build while the dev server is active corrupts the `.next/` compilation cache, causing all API routes to return HTML 500 error pages.
 
-After running `npm run build`, always restart the dev server:
+After running `npm run build`, always restart the dev server with a clean cache:
 
 ```bash
-# Kill the running dev server, then:
-npm run dev -- -p 3001
+npm run dev:clean
 ```
 
 Wait for the server to report "Ready" before running API or canary checks.
+
+### Next.js ENOENT (`_document.js`) Recovery
+
+**Symptom:** Frontend returns HTTP 500 with:
+```
+ENOENT: no such file or directory, open '.../.next/server/pages/_document.js'
+```
+
+**Cause:** The `.next/` compilation cache becomes corrupted when:
+1. `npm run build` runs while `next dev` is active (most common)
+2. The dev server crashes mid-compilation
+3. The `.next/` directory is partially deleted
+
+**Fix:**
+1. Stop the dev server (`Ctrl+C` or `pkill -f 'next dev'`)
+2. Clear the stale cache: `rm -rf .next`
+3. Restart with a clean build:
+   ```bash
+   npm run dev:clean
+   ```
+
+**One-liner recovery (kills existing server + clean restart):**
+```bash
+npm run dev:restart
+```
+
+**Prevention:** Always use `npm run dev:clean` after running `npm run build`.
 
 ## Daily Verify (One Command)
 
