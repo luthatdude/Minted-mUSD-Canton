@@ -1,145 +1,78 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
-import { useLoopWallet, LoopContract } from "@/hooks/useLoopWallet";
+import { useLoopWallet } from "@/hooks/useLoopWallet";
+import {
+  useCantonLedger,
+  cantonExercise,
+  fetchFreshBalances,
+  type CantonBalancesData,
+  type SimpleToken,
+} from "@/hooks/useCantonLedger";
 import WalletConnector from "@/components/WalletConnector";
 
-const PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || "";
 type CantonMintAsset = "USDC" | "USDCX" | "CANTON_COIN";
 
-const templateCandidates = {
-  DirectMintService: [
-    `${PACKAGE_ID}:CantonDirectMint:CantonDirectMintService`,
-    `${PACKAGE_ID}:MintedProtocolV2Fixed:DirectMintService`,
-  ],
-  USDC: [
-    `${PACKAGE_ID}:CantonDirectMint:CantonUSDC`,
-    `${PACKAGE_ID}:MintedProtocolV2Fixed:USDC`,
-  ],
-  USDCx: [
-    `${PACKAGE_ID}:CantonDirectMint:USDCx`,
-  ],
-  MUSD: [
-    `${PACKAGE_ID}:CantonDirectMint:CantonMUSD`,
-    `${PACKAGE_ID}:MintedProtocolV2Fixed:MUSD`,
-  ],
-  CantonCoin: [
-    `${PACKAGE_ID}:CantonCoinToken:CantonCoin`,
-  ],
-  CoinMintService: [
-    `${PACKAGE_ID}:CantonCoinMint:CoinMintService`,
-  ],
-};
+function pickCoveringToken(tokens: SimpleToken[], requested: number): SimpleToken | null {
+  if (tokens.length === 0) return null;
+  const sorted = [...tokens].sort((a, b) => parseFloat(a.amount || "0") - parseFloat(b.amount || "0"));
+  return sorted.find((t) => parseFloat(t.amount || "0") + 0.000000001 >= requested) || null;
+}
+
+async function selectTokenForAmount(
+  party: string,
+  templateId: string,
+  splitChoice: string,
+  tokensList: SimpleToken[],
+  requested: number,
+  getTokens: (fresh: CantonBalancesData) => SimpleToken[],
+  symbol: string
+): Promise<SimpleToken> {
+  const covering = pickCoveringToken(tokensList, requested);
+  if (!covering) {
+    const largest = tokensList.reduce((max, t) => Math.max(max, parseFloat(t.amount || "0")), 0);
+    throw new Error(
+      largest > 0
+        ? `No ${symbol} contract large enough. Largest available is ${largest.toFixed(2)} ${symbol}.`
+        : `No ${symbol} token available.`
+    );
+  }
+  const coveringAmt = parseFloat(covering.amount || "0");
+  if (coveringAmt <= requested + 0.000000001) return covering;
+
+  const splitResp = await cantonExercise(templateId, covering.contractId, splitChoice, { splitAmount: requested.toString() }, { party });
+  if (!splitResp.success) throw new Error(splitResp.error || `Failed to split ${symbol} token.`);
+  const refreshed = await fetchFreshBalances(party);
+  const refreshedTokens = getTokens(refreshed);
+  const exact = refreshedTokens.find((t) => Math.abs(parseFloat(t.amount || "0") - requested) < 0.000001);
+  const fallback = pickCoveringToken(refreshedTokens, requested);
+  const selected = exact || fallback;
+  if (!selected) throw new Error(`Unable to select ${symbol} token after split.`);
+  return selected;
+}
 
 export function CantonMint() {
   const loopWallet = useLoopWallet();
-  
+  const activeParty = loopWallet.partyId || null;
+  const { data, loading: ledgerLoading, refresh } = useCantonLedger(15_000, activeParty);
+
   const [tab, setTab] = useState<"mint" | "redeem">("mint");
   const [mintAsset, setMintAsset] = useState<CantonMintAsset>("USDC");
   const [amount, setAmount] = useState("");
-  const [serviceId, setServiceId] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Stats
-  const [services, setServices] = useState<LoopContract[]>([]);
-  const [usdcContracts, setUsdcContracts] = useState<LoopContract[]>([]);
-  const [usdcxContracts, setUsdcxContracts] = useState<LoopContract[]>([]);
-  const [musdContracts, setMusdContracts] = useState<LoopContract[]>([]);
-  const [cantonCoinContracts, setCantonCoinContracts] = useState<LoopContract[]>([]);
-  const [coinMintServices, setCoinMintServices] = useState<LoopContract[]>([]);
-
-  const queryWithCandidates = useCallback(async (candidates: string[]): Promise<LoopContract[]> => {
-    const merged = new Map<string, LoopContract>();
-
-    for (const templateId of candidates) {
-      if (!templateId) continue;
-      try {
-        const contracts = await loopWallet.queryContracts(templateId);
-        contracts.forEach((c) => merged.set(c.contractId, c));
-      } catch {
-        // Ignore missing template versions and continue to the next candidate.
-      }
-    }
-
-    return Array.from(merged.values());
-  }, [loopWallet]);
-
-  const findServiceContract = useCallback((id: string) => {
-    return services.find((svc) => svc.contractId === id) ?? null;
-  }, [services]);
-
-  const loadContracts = useCallback(async () => {
-    if (!loopWallet.isConnected) return;
-    try {
-      const [svc, usdc, usdcx, musd, ctn, coinMint] = await Promise.all([
-        queryWithCandidates(templateCandidates.DirectMintService),
-        queryWithCandidates(templateCandidates.USDC),
-        queryWithCandidates(templateCandidates.USDCx),
-        queryWithCandidates(templateCandidates.MUSD),
-        queryWithCandidates(templateCandidates.CantonCoin),
-        queryWithCandidates(templateCandidates.CoinMintService),
-      ]);
-
-      setServices(svc);
-      setUsdcContracts(usdc);
-      setUsdcxContracts(usdcx);
-      setMusdContracts(musd);
-      setCantonCoinContracts(ctn);
-      setCoinMintServices(coinMint);
-      setServiceId(svc.length > 0 ? svc[0].contractId : "");
-    } catch (err) {
-      console.error("Failed to load contracts:", err);
-    }
-  }, [loopWallet.isConnected, queryWithCandidates]);
-
-  useEffect(() => {
-    loadContracts();
-  }, [loadContracts]);
-
-  const totalUsdc = usdcContracts.reduce(
-    (sum, c) => sum + parseFloat(c.payload?.amount || "0"), 0
-  );
-  const totalUsdcx = usdcxContracts.reduce(
-    (sum, c) => sum + parseFloat(c.payload?.amount || "0"), 0
-  );
-  const totalMusd = musdContracts.reduce(
-    (sum, c) => sum + parseFloat(c.payload?.amount || "0"), 0
-  );
-  const totalCantonCoin = cantonCoinContracts.reduce(
-    (sum, c) => sum + parseFloat(c.payload?.amount || "0"), 0
-  );
-
-  function pickContractForAmount(contracts: LoopContract[], requestedAmount: number): string {
-    const eligible = contracts
-      .map((contract) => ({ contractId: contract.contractId, amount: parseFloat(contract.payload?.amount || "0") }))
-      .filter((entry) => Number.isFinite(entry.amount) && entry.amount > 0)
-      .sort((a, b) => b.amount - a.amount);
-
-    if (eligible.length === 0) {
-      return "";
-    }
-
-    const withEnough = eligible.find((entry) => entry.amount >= requestedAmount);
-    return withEnough ? withEnough.contractId : "";
-  }
-
-  async function exerciseWithArgFallback(
-    templateId: string,
-    contractId: string,
-    choice: string,
-    argsCandidates: Array<Record<string, any>>
-  ) {
-    let lastError: any = null;
-    for (const args of argsCandidates) {
-      try {
-        return await loopWallet.exerciseChoice(templateId, contractId, choice, args);
-      } catch (err) {
-        lastError = err;
-      }
-    }
-    throw lastError ?? new Error(`Failed to exercise ${choice}`);
-  }
+  // Backend-driven data (no Loop SDK queries needed for reads)
+  const directMintService = data?.directMintService || null;
+  const serviceId = directMintService?.contractId || "";
+  const usdcTokens = data?.usdcTokens?.filter(t => t.template !== "USDCx") || [];
+  const usdcxTokens = data?.usdcTokens?.filter(t => t.template === "USDCx") || [];
+  const musdTokens = data?.tokens || [];
+  const cantonCoinTokens = data?.cantonCoinTokens || [];
+  const totalUsdc = usdcTokens.reduce((s, t) => s + parseFloat(t.amount || "0"), 0);
+  const totalUsdcx = usdcxTokens.reduce((s, t) => s + parseFloat(t.amount || "0"), 0);
+  const totalMusd = data ? parseFloat(data.totalBalance || "0") : 0;
+  const totalCantonCoin = data?.totalCoin ? parseFloat(data.totalCoin) : 0;
 
   async function handleMint() {
     if (!serviceId && mintAsset !== "CANTON_COIN") return;
@@ -148,81 +81,53 @@ export function CantonMint() {
     setResult(null);
     try {
       const parsed = parseFloat(amount);
-      if (!Number.isFinite(parsed) || parsed <= 0) {
-        throw new Error("Enter a valid amount");
-      }
+      if (!Number.isFinite(parsed) || parsed <= 0) throw new Error("Enter a valid amount");
+      if (!activeParty) throw new Error("Connect your Loop wallet first.");
+
+      const fresh = await fetchFreshBalances(activeParty);
+      const freshService = fresh.directMintService;
+      if (!freshService && mintAsset !== "CANTON_COIN") throw new Error("Direct mint service not found on ledger.");
 
       if (mintAsset === "USDC") {
-        const selectedUsdcContractId = pickContractForAmount(usdcContracts, parsed);
-        if (!selectedUsdcContractId) {
-          throw new Error("No single USDC token has enough balance for this amount");
-        }
-
-        const service = findServiceContract(serviceId);
-        if (!service) throw new Error("Direct mint service unavailable");
-
-        await exerciseWithArgFallback(
-          service.templateId,
-          service.contractId,
-          "DirectMint_Mint",
-          [
-            { usdcCid: selectedUsdcContractId, amount },
-            { user: loopWallet.partyId, usdcCid: selectedUsdcContractId },
-            { usdcCid: selectedUsdcContractId },
-          ]
+        const freshUsdc = (fresh.usdcTokens || []).filter(t => t.template !== "USDCx");
+        const token = await selectTokenForAmount(
+          fresh.party, "CantonUSDC", "CantonUSDC_Split", freshUsdc, parsed,
+          (r) => (r.usdcTokens || []).filter(t => t.template !== "USDCx"), "USDC"
         );
+        const resp = await cantonExercise("CantonDirectMintService", freshService!.contractId, "DirectMint_Mint", {
+          user: fresh.party, usdcCid: token.contractId,
+        }, { party: fresh.party });
+        if (!resp.success) throw new Error(resp.error || "Mint failed");
       } else if (mintAsset === "USDCX") {
-        const selectedUsdcxContractId = pickContractForAmount(usdcxContracts, parsed);
-        if (!selectedUsdcxContractId) {
-          throw new Error("No single USDCx token has enough balance for this amount");
-        }
-
-        const service = findServiceContract(serviceId);
-        if (!service) throw new Error("Direct mint service unavailable");
-
-        await exerciseWithArgFallback(
-          service.templateId,
-          service.contractId,
-          "DirectMint_MintWithUSDCx",
-          [
-            { usdcxCid: selectedUsdcxContractId, amount },
-            { user: loopWallet.partyId, usdcxCid: selectedUsdcxContractId },
-            { usdcxCid: selectedUsdcxContractId },
-          ]
+        const freshUsdcx = (fresh.usdcTokens || []).filter(t => t.template === "USDCx");
+        const token = await selectTokenForAmount(
+          fresh.party, "USDCx", "USDCx_Split", freshUsdcx, parsed,
+          (r) => (r.usdcTokens || []).filter(t => t.template === "USDCx"), "USDCx"
         );
+        const resp = await cantonExercise("CantonDirectMintService", freshService!.contractId, "DirectMint_MintWithUSDCx", {
+          user: fresh.party, usdcxCid: token.contractId,
+        }, { party: fresh.party });
+        if (!resp.success) throw new Error(resp.error || "Mint failed");
       } else {
-        const selectedCoinContractId = pickContractForAmount(cantonCoinContracts, parsed);
-        if (!selectedCoinContractId) {
-          throw new Error("No single CantonCoin token has enough balance for this amount");
-        }
-        const coinService = coinMintServices[0];
-        if (!coinService) {
-          throw new Error("CantonCoin minting service is not configured on this network");
-        }
-
-        // CoinMintService requires an operator-owned USDCx contract as bridge backing.
-        const operatorUsdcx = usdcxContracts.find(
-          (c) => (c.payload?.owner || "") !== (loopWallet.partyId || "")
+        const freshCoins = fresh.cantonCoinTokens || [];
+        const token = await selectTokenForAmount(
+          fresh.party, "CantonCoin", "CantonCoin_Split", freshCoins, parsed,
+          (r) => r.cantonCoinTokens || [], "CantonCoin"
         );
-        if (!operatorUsdcx) {
-          throw new Error("Operator USDCx backing is not visible for CantonCoin minting");
-        }
+        // CoinMintService — source from operator data if needed
+        const operatorFresh = await fetchFreshBalances(null).catch(() => null);
+        const coinSvc = operatorFresh?.directMintService || freshService;
+        if (!coinSvc) throw new Error("CantonCoin minting service is not configured on this network");
 
-        await loopWallet.exerciseChoice(
-          coinService.templateId,
-          coinService.contractId,
-          "MintMusdWithCoin",
-          {
-            user: loopWallet.partyId,
-            coinCid: selectedCoinContractId,
-            operatorUsdcxCid: operatorUsdcx.contractId,
-          }
-        );
+        const resp = await cantonExercise("CoinMintService", coinSvc.contractId, "MintMusdWithCoin", {
+          user: fresh.party, coinCid: token.contractId,
+        }, { party: fresh.party });
+        if (!resp.success) throw new Error(resp.error || "Coin mint failed");
       }
 
       setResult(`Minted ${amount} mUSD on Canton`);
       setAmount("");
-      await loadContracts(); // Refresh
+      await refresh();
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -237,29 +142,26 @@ export function CantonMint() {
     setResult(null);
     try {
       const parsed = parseFloat(amount);
-      if (!Number.isFinite(parsed) || parsed <= 0) {
-        throw new Error("Enter a valid amount");
-      }
-      const selectedMusdContractId = pickContractForAmount(musdContracts, parsed);
-      if (!selectedMusdContractId) {
-        throw new Error("No single mUSD token has enough balance for this amount");
-      }
-      const service = findServiceContract(serviceId);
-      if (!service) throw new Error("Direct mint service unavailable");
+      if (!Number.isFinite(parsed) || parsed <= 0) throw new Error("Enter a valid amount");
+      if (!activeParty) throw new Error("Connect your Loop wallet first.");
 
-      await exerciseWithArgFallback(
-        service.templateId,
-        service.contractId,
-        "DirectMint_Redeem",
-        [
-          { musdCid: selectedMusdContractId, amount },
-          { user: loopWallet.partyId, musdCid: selectedMusdContractId },
-          { musdCid: selectedMusdContractId },
-        ]
+      const fresh = await fetchFreshBalances(activeParty);
+      const freshService = fresh.directMintService;
+      if (!freshService) throw new Error("Direct mint service not found on ledger.");
+
+      const freshMusd = fresh.tokens || [];
+      const token = await selectTokenForAmount(
+        fresh.party, "CantonMUSD", "CantonMUSD_Split", freshMusd, parsed,
+        (r) => r.tokens || [], "mUSD"
       );
+      const resp = await cantonExercise("CantonDirectMintService", freshService.contractId, "DirectMint_Redeem", {
+        user: fresh.party, musdCid: token.contractId,
+      }, { party: fresh.party });
+      if (!resp.success) throw new Error(resp.error || "Redeem failed");
+
       setResult(`Redeemed ${amount} mUSD for USDC on Canton`);
       setAmount("");
-      await loadContracts(); // Refresh
+      await refresh();
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -273,12 +175,12 @@ export function CantonMint() {
     mintAsset === "USDC" ? "USDC" : mintAsset === "USDCX" ? "USDCx" : "CantonCoin";
   const mintInputUnavailable =
     mintAsset === "USDC"
-      ? usdcContracts.length === 0
+      ? usdcTokens.length === 0
       : mintAsset === "USDCX"
-        ? usdcxContracts.length === 0
-        : cantonCoinContracts.length === 0 || coinMintServices.length === 0;
+        ? usdcxTokens.length === 0
+        : cantonCoinTokens.length === 0;
 
-  if (!loopWallet.isConnected) {
+  if (!activeParty) {
     return (
       <div className="flex min-h-[400px] items-center justify-center">
         <div className="max-w-md space-y-6">
@@ -395,7 +297,7 @@ export function CantonMint() {
             <div className="flex items-center justify-between text-sm">
               <span className="text-gray-400">Mint Service</span>
               <span className="font-mono text-xs text-emerald-400">
-                {serviceId ? `${serviceId.slice(0, 24)}...` : "No service found"}
+                {serviceId ? `${serviceId.slice(0, 24)}...` : ledgerLoading ? "Loading…" : "Not deployed on this participant"}
               </span>
             </div>
             <div className="divider my-2" />
@@ -412,11 +314,11 @@ export function CantonMint() {
               <span className="text-gray-400">Token Selection</span>
               <span className="text-gray-300">
                 Auto-select from {tab === "mint"
-                  ? (mintAsset === "USDC" ? usdcContracts.length : mintAsset === "USDCX" ? usdcxContracts.length : cantonCoinContracts.length)
-                  : musdContracts.length} contracts
+                  ? (mintAsset === "USDC" ? usdcTokens.length : mintAsset === "USDCX" ? usdcxTokens.length : cantonCoinTokens.length)
+                  : musdTokens.length} contracts
               </span>
             </div>
-            {tab === "mint" && mintAsset === "CANTON_COIN" && coinMintServices.length === 0 && (
+            {tab === "mint" && mintAsset === "CANTON_COIN" && !directMintService && (
               <>
                 <div className="divider my-2" />
                 <p className="text-xs text-amber-300">

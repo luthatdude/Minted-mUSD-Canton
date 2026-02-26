@@ -177,7 +177,8 @@ export function CantonBorrow() {
   const userMusdBalance = userMusdTokens.reduce((sum, token) => sum + parseFloat(token.amount || "0"), 0);
 
   const collateralInfos = useMemo<CantonCollateralInfo[]>(() => {
-    const feeds = data?.priceFeeds || [];
+    // Use merged user+operator price feeds so cards render even when user has no feeds
+    const feeds = data ? mergePriceFeeds(data, operatorData || null) : (operatorData?.priceFeeds || []);
     const feedMap = new Map<string, number>();
     for (const feed of feeds) {
       const price = parseFloat(feed.priceMusd || "0");
@@ -209,7 +210,7 @@ export function CantonBorrow() {
         liqPenalty: cfg?.liqPenaltyBps || 0,
       };
     });
-  }, [data?.priceFeeds, userEscrows, lendingService?.configs]);
+  }, [data, operatorData?.priceFeeds, userEscrows, lendingService?.configs]);
 
   const selectedCollateralInfo = collateralInfos.find((info) => info.key === collateralAsset) || null;
   const selectedAssetContracts = getAssetContracts(collateralAsset, data);
