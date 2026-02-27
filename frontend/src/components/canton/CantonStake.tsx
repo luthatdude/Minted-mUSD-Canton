@@ -385,7 +385,7 @@ export function CantonStake() {
       if (!resp.success) throw new Error(resp.error || "Unstake failed");
       setTxSuccess(`Unstaked ${fmtAmount(smusd.amount)} smUSD → mUSD`);
       await refresh(); void loadPreflight();
-    } catch (err: any) { setTxError(err.message); }
+    } catch (err: any) { setTxError(sanitizeCantonError(err.message || "").message); }
     finally { setTxLoading(false); }
   }
 
@@ -450,7 +450,7 @@ export function CantonStake() {
       if (!resp.success) throw new Error(resp.error || "Stake failed");
       setTxSuccess(`Deposited ${fmtAmount(parsedAmount)} ${depositAsset} → smUSD-E shares`);
       setAmount(""); await refresh();
-    } catch (err: any) { setTxError(err.message); }
+    } catch (err: any) { setTxError(sanitizeCantonError(err.message || "").message); }
     finally { setTxLoading(false); }
   }
 
@@ -487,7 +487,7 @@ export function CantonStake() {
       setTxSuccess(`Unstaked ${fmtAmount(parsedAmount, 4)} smUSD-E → mUSD`);
       setAmount("");
       await refresh();
-    } catch (err: any) { setTxError(err.message); }
+    } catch (err: any) { setTxError(sanitizeCantonError(err.message || "").message); }
     finally { setTxLoading(false); }
   }
 
@@ -528,7 +528,7 @@ export function CantonStake() {
       if (!resp.success) throw new Error(resp.error || "Deposit failed");
       setTxSuccess(`Deposited ${fmtAmount(parsedAmount)} CTN → Boost LP`);
       setAmount(""); await refresh();
-    } catch (err: any) { setTxError(err.message); }
+    } catch (err: any) { setTxError(sanitizeCantonError(err.message || "").message); }
     finally { setTxLoading(false); }
   }
 
@@ -554,7 +554,7 @@ export function CantonStake() {
       if (!resp.success) throw new Error(resp.error || "Withdraw failed");
       setTxSuccess(`Withdrew Boost LP → CTN`);
       await refresh();
-    } catch (err: any) { setTxError(err.message); }
+    } catch (err: any) { setTxError(sanitizeCantonError(err.message || "").message); }
     finally { setTxLoading(false); }
   }
 
@@ -570,11 +570,19 @@ export function CantonStake() {
     );
   }
   if (error && !data) {
+    const { message: sanitizedError, tag } = sanitizeCantonError(error);
     return (
       <div className="flex min-h-[400px] items-center justify-center">
         <div className="max-w-md space-y-4 text-center">
-          <h3 className="text-xl font-semibold text-white">Canton Unavailable</h3>
-          <p className="text-sm text-gray-400">{error}</p>
+          <h3 className="text-xl font-semibold text-white">
+            {tag === "INFRA" ? "Canton Network Unreachable" : "Canton Unavailable"}
+          </h3>
+          <p className="text-sm text-gray-400">{sanitizedError}</p>
+          {tag === "INFRA" && (
+            <p className="text-xs text-gray-500">
+              The Canton participant or relay service may be offline. Staking operations require a live Canton connection.
+            </p>
+          )}
           <button onClick={refresh} className="rounded-xl bg-emerald-600 px-6 py-2 font-medium text-white hover:bg-emerald-500">Retry</button>
         </div>
       </div>
