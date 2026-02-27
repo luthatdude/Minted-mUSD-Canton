@@ -375,15 +375,20 @@ jobs:
           export PATH="$DAML_HOME/bin:$PATH"
           daml version
 
-      - name: Build DAML (LF2-safe, blocked modules excluded)
+      - name: Build & Test DAML (LF2-safe, blocked modules excluded)
         run: |
           export PATH="$DAML_HOME/bin:$PATH"
-          bash scripts/daml-build-lf2.sh --no-test
+          bash scripts/daml-build-lf2.sh
 
-      - name: Run DAML smoke tests
+      - name: Verify DAR output exists
         run: |
-          export PATH="$DAML_HOME/bin:$PATH"
-          cd daml/.daml/dist-lf2 && ls -la *.dar
+          DAR_COUNT=$(find daml/.daml/dist-lf2 -name '*.dar' 2>/dev/null | wc -l | tr -d ' ')
+          if [ "$DAR_COUNT" -eq 0 ]; then
+            echo "::error::No DAR files found in daml/.daml/dist-lf2/"
+            exit 1
+          fi
+          echo "OK: $DAR_COUNT DAR file(s) in daml/.daml/dist-lf2/"
+          ls -la daml/.daml/dist-lf2/*.dar
 
   # ============================================================
   #  RELAY: TypeScript Build & Lint

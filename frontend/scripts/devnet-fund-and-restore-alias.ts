@@ -169,17 +169,18 @@ function updateEnvLocal(args: Args): void {
 
 // ── Funding API calls ────────────────────────────────────────────────
 
-async function fundParty(args: Args): Promise<void> {
+async function fundParty(args: Args): Promise<number> {
   if (!args.execute) {
     console.log("\n  Planned funding:");
     console.log(`    mUSD: ${args.musd} via ${args.baseUrl}/api/canton-devnet-fund-musd`);
     console.log(`    USDC: ${args.usdc} via ${args.baseUrl}/api/canton-devnet-faucet`);
     console.log(`    USDCx: ${args.usdcx} via ${args.baseUrl}/api/canton-devnet-faucet`);
     console.log("\n  DRY RUN: No API calls made.");
-    return;
+    return 0;
   }
 
   console.log("\n  Funding party...");
+  let failures = 0;
 
   // Fund mUSD
   try {
@@ -190,9 +191,14 @@ async function fundParty(args: Args): Promise<void> {
     });
     const body = await resp.text();
     console.log(`    mUSD ${args.musd}: ${resp.status} ${body.slice(0, 100)}`);
+    if (!resp.ok) {
+      console.error(`    ERROR: mUSD funding returned non-2xx status ${resp.status}`);
+      failures++;
+    }
   } catch (e: any) {
     console.error(`    mUSD funding failed: ${e.message}`);
     console.error("    Is the frontend running? Check: curl " + args.baseUrl);
+    failures++;
   }
 
   // Fund USDC
@@ -200,12 +206,17 @@ async function fundParty(args: Args): Promise<void> {
     const resp = await fetch(`${args.baseUrl}/api/canton-devnet-faucet`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ party: args.userParty, asset: "usdc", amount: String(args.usdc) }),
+      body: JSON.stringify({ party: args.userParty, asset: "USDC", amount: String(args.usdc) }),
     });
     const body = await resp.text();
     console.log(`    USDC ${args.usdc}: ${resp.status} ${body.slice(0, 100)}`);
+    if (!resp.ok) {
+      console.error(`    ERROR: USDC funding returned non-2xx status ${resp.status}`);
+      failures++;
+    }
   } catch (e: any) {
     console.error(`    USDC funding failed: ${e.message}`);
+    failures++;
   }
 
   // Fund USDCx
@@ -213,13 +224,20 @@ async function fundParty(args: Args): Promise<void> {
     const resp = await fetch(`${args.baseUrl}/api/canton-devnet-faucet`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ party: args.userParty, asset: "usdcx", amount: String(args.usdcx) }),
+      body: JSON.stringify({ party: args.userParty, asset: "USDCx", amount: String(args.usdcx) }),
     });
     const body = await resp.text();
     console.log(`    USDCx ${args.usdcx}: ${resp.status} ${body.slice(0, 100)}`);
+    if (!resp.ok) {
+      console.error(`    ERROR: USDCx funding returned non-2xx status ${resp.status}`);
+      failures++;
+    }
   } catch (e: any) {
     console.error(`    USDCx funding failed: ${e.message}`);
+    failures++;
   }
+
+  return failures;
 }
 
 // ── Main ─────────────────────────────────────────────────────────────
@@ -240,11 +258,15 @@ async function main(): Promise<void> {
 
   // Step 2: Fund the party
   console.log("\n--- Step 2: Fund party ---");
-  await fundParty(args);
+  const fundingFailures = await fundParty(args);
 
   // Step 3: Next steps
   console.log("\n--- Next steps ---");
   if (args.execute) {
+    if (fundingFailures > 0) {
+      console.error(`\n  ERROR: ${fundingFailures} funding call(s) failed. Review output above.`);
+      process.exit(1);
+    }
     console.log("  1. Restart the frontend dev server");
     console.log("  2. Connect the wallet and verify balances");
     console.log("  3. Check: curl http://localhost:3001/api/canton-balances?party=<user-party>");
