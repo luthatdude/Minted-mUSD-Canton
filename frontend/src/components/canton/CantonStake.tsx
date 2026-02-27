@@ -13,6 +13,7 @@ import {
   type CantonBalancesData,
   type SimpleToken,
 } from "@/hooks/useCantonLedger";
+import { sanitizeCantonError, isStaleContractError } from "@/lib/canton-error";
 
 type CantonPoolTab = "smusd" | "ethpool" | "boostpool";
 type StakeAction = "stake" | "unstake";
@@ -251,7 +252,7 @@ export function CantonStake() {
         }, { party: fresh.party });
         if (!resp.success) {
           const errMsg = resp.error || "Stake failed";
-          if (["CONTRACT_NOT_FOUND", "Contract could not be found with id", "INCONSISTENT"].some(s => errMsg.includes(s))) {
+          if (isStaleContractError(errMsg)) {
             // Retry once with fully fresh data
             const retryFresh = await fetchFreshBalances(activeParty);
             let retrySvc = retryFresh.stakingService;
@@ -260,7 +261,7 @@ export function CantonStake() {
             const retryToken = pickExactOrCoveringToken(retryFresh.tokens || [], parsedAmount);
             if (!retryToken) throw new Error("No mUSD token available on retry.");
             const retryResp = await cantonExercise("CantonStakingService", retrySvc.contractId, "Stake", { user: retryFresh.party, musdCid: retryToken.contractId }, { party: retryFresh.party });
-            if (!retryResp.success) throw new Error("Stake failed after retry. Please try again.");
+            if (!retryResp.success) throw new Error(`Stake failed after retry (stale contract race): ${sanitizeCantonError(retryResp.error || "").message}`);
             setTxSuccess(`Staked ${fmtAmount(parsedAmount)} mUSD → smUSD shares (retried after stale CID)`);
             setAmount(""); await refresh(); void loadPreflight();
             return;
@@ -272,35 +273,67 @@ export function CantonStake() {
       } else {
         // ── Multi-contract sequential stake ──
         // No single token covers the requested amount, but total does.
+        // Each step refreshes both service CID (consuming choice) and token list
+        // to avoid stale-CID failures from concurrent ledger activity.
         console.log("[CantonStake] Multi-contract stake:", { requested: parsedAmount, totalAvailable, tokenCount: freshTokens.length });
-        const sorted = [...freshTokens].sort((a, b) => parseTokenAmount(b) - parseTokenAmount(a));
         let remaining = parsedAmount;
         let stakesCompleted = 0;
         let currentParty = fresh.party;
         let currentServiceCid = freshService.contractId;
+        // Track consumed CIDs to avoid re-selecting them
+        const consumedCids = new Set<string>();
 
-        for (const token of sorted) {
-          if (remaining <= EPSILON) break;
+        while (remaining > EPSILON) {
+          // Refresh token list every step to get current CIDs
+          const stepFresh = stakesCompleted === 0 ? fresh : await fetchFreshBalances(activeParty);
+          const availableTokens = (stepFresh.tokens || [])
+            .filter(t => !consumedCids.has(t.contractId) && parseTokenAmount(t) > EPSILON);
+
+          if (availableTokens.length === 0) {
+            throw new Error(`Could only stake ${fmtAmount(parsedAmount - remaining)} of ${fmtAmount(parsedAmount)} mUSD. No more tokens available.`);
+          }
+
+          // Pick the best token for this step
+          const sorted = [...availableTokens].sort((a, b) => parseTokenAmount(b) - parseTokenAmount(a));
+          const token = sorted[0];
           const tokenAmt = parseTokenAmount(token);
-          if (tokenAmt <= EPSILON) continue;
+
+          // Refresh service CID if we've completed a prior step
+          if (stakesCompleted > 0) {
+            let svc = stepFresh.stakingService;
+            if (!svc) { const opF = await fetchFreshBalances(null).catch(() => null); svc = opF?.stakingService || null; }
+            if (!svc) throw new Error("Staking service not found during multi-token stake");
+            currentServiceCid = svc.contractId;
+            currentParty = stepFresh.party;
+          }
 
           if (tokenAmt <= remaining + EPSILON) {
-            // Use entire token
+            // Use entire token — with one retry on stale CID
             const resp = await cantonExercise("CantonStakingService", currentServiceCid, "Stake", {
               user: currentParty, musdCid: token.contractId,
             }, { party: currentParty });
-            if (!resp.success) throw new Error(resp.error || `Stake step ${stakesCompleted + 1} failed`);
-            remaining -= tokenAmt;
-            stakesCompleted++;
-            // Refresh service CID (Stake is consuming)
-            if (remaining > EPSILON) {
-              const reFresh = await fetchFreshBalances(activeParty);
-              let svc = reFresh.stakingService;
-              if (!svc) { const opF = await fetchFreshBalances(null).catch(() => null); svc = opF?.stakingService || null; }
-              if (!svc) throw new Error("Staking service not found during multi-token stake");
-              currentServiceCid = svc.contractId;
-              currentParty = reFresh.party;
+            if (!resp.success) {
+              if (isStaleContractError(resp.error || "")) {
+                // One retry with fully fresh data
+                const retryFresh = await fetchFreshBalances(activeParty);
+                let retrySvc = retryFresh.stakingService;
+                if (!retrySvc) { const opF = await fetchFreshBalances(null).catch(() => null); retrySvc = opF?.stakingService || null; }
+                if (!retrySvc) throw new Error("Staking service not found on retry");
+                const retryTokens = (retryFresh.tokens || []).filter(t => !consumedCids.has(t.contractId) && parseTokenAmount(t) > EPSILON);
+                const retryToken = retryTokens.sort((a, b) => parseTokenAmount(b) - parseTokenAmount(a))[0];
+                if (!retryToken) throw new Error(`Stake step ${stakesCompleted + 1} failed: no token available after stale contract retry.`);
+                const retryResp = await cantonExercise("CantonStakingService", retrySvc.contractId, "Stake", { user: retryFresh.party, musdCid: retryToken.contractId }, { party: retryFresh.party });
+                if (!retryResp.success) throw new Error(`Stake step ${stakesCompleted + 1} failed after retry: ${sanitizeCantonError(retryResp.error || "").message}`);
+                consumedCids.add(retryToken.contractId);
+                remaining -= parseTokenAmount(retryToken);
+              } else {
+                throw new Error(`Stake step ${stakesCompleted + 1} failed: ${sanitizeCantonError(resp.error || "").message}`);
+              }
+            } else {
+              consumedCids.add(token.contractId);
+              remaining -= tokenAmt;
             }
+            stakesCompleted++;
           } else {
             // Token larger than remaining — split and stake
             const splitResp = await cantonExercise("CantonMUSD", token.contractId, "CantonMUSD_Split", { splitAmount: remaining.toString() }, { party: currentParty });
@@ -314,7 +347,7 @@ export function CantonStake() {
             const resp = await cantonExercise("CantonStakingService", svc.contractId, "Stake", {
               user: afterSplit.party, musdCid: splitToken.contractId,
             }, { party: afterSplit.party });
-            if (!resp.success) throw new Error(resp.error || "Stake failed after split");
+            if (!resp.success) throw new Error(`Stake after split failed: ${sanitizeCantonError(resp.error || "").message}`);
             remaining = 0;
             stakesCompleted++;
           }
@@ -326,7 +359,7 @@ export function CantonStake() {
         setTxSuccess(`Staked ${fmtAmount(parsedAmount)} mUSD → smUSD shares (${stakesCompleted} transactions)`);
         setAmount(""); await refresh(); void loadPreflight();
       }
-    } catch (err: any) { setTxError(err.message); }
+    } catch (err: any) { setTxError(sanitizeCantonError(err.message || "").message); }
     finally { setTxLoading(false); }
   }
 

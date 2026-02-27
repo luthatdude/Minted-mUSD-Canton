@@ -16,6 +16,7 @@ import {
   type SimpleToken,
 } from "@/hooks/useCantonLedger";
 import { useLoopWallet } from "@/hooks/useLoopWallet";
+import { sanitizeCantonError } from "@/lib/canton-error";
 
 type ActionTab = "deposit" | "borrow" | "repay" | "withdraw";
 type CollateralAsset = "CTN" | "SMUSD" | "SMUSDE";
@@ -175,6 +176,7 @@ export function CantonBorrow() {
 
   const userMusdTokens = useMemo(() => data?.tokens || [], [data?.tokens]);
   const userMusdBalance = userMusdTokens.reduce((sum, token) => sum + parseFloat(token.amount || "0"), 0);
+  const largestMusdToken = userMusdTokens.reduce((max, token) => Math.max(max, parseFloat(token.amount || "0")), 0);
 
   const collateralInfos = useMemo<CantonCollateralInfo[]>(() => {
     // Use merged user+operator price feeds so cards render even when user has no feeds
@@ -257,6 +259,8 @@ export function CantonBorrow() {
     (sum, row) => sum + parseFloat(row.debtMusd || "0") + parseFloat(row.interestAccrued || "0"),
     0
   );
+  // Repay uses one contract per tx — cap MAX to what a single token can cover
+  const repayMaxAmount = outstandingDebt > 0 ? Math.min(largestMusdToken, outstandingDebt) : 0;
   const totalCollateralUsd = collateralInfos.reduce((sum, row) => sum + row.valueUsd, 0);
   const borrowCapacityUsd = collateralInfos.reduce((sum, row) => sum + (row.valueUsd * row.factorBps) / 10000, 0);
   const maxBorrowableUsd = Math.max(borrowCapacityUsd - outstandingDebt, 0);
@@ -408,7 +412,7 @@ export function CantonBorrow() {
           if (nativeResult.success) {
             console.log("[CantonBorrow] Native repay succeeded:", nativeResult.commandId);
             setResult(`Repay submitted on Canton (native CIP-56 path).`);
-            setAmount(""); refresh();
+            setAmount(""); await refresh();
             return;
           }
           // Native failed — surface error to user (hybrid fallback decommissioned)
@@ -543,10 +547,10 @@ export function CantonBorrow() {
 
       setResult(`${action.charAt(0).toUpperCase() + action.slice(1)} submitted on Canton.`);
       setAmount("");
-      refresh();
+      await refresh();
     } catch (err: any) {
       console.error("[CantonBorrow] action failed:", err);
-      setTxError(err.message || "Action failed");
+      setTxError(sanitizeCantonError(err.message || "Action failed").message);
     } finally {
       setSubmitting(false);
     }
@@ -573,11 +577,12 @@ export function CantonBorrow() {
   }
 
   if (error && !data) {
+    const { message: sanitizedError } = sanitizeCantonError(error);
     return (
       <div className="flex min-h-[400px] items-center justify-center">
         <div className="card-gradient-border max-w-md p-8 text-center">
           <h3 className="mb-2 text-xl font-semibold text-white">Canton Lending Unavailable</h3>
-          <p className="mb-4 text-gray-400">{error}</p>
+          <p className="mb-4 text-gray-400">{sanitizedError}</p>
           <button
             onClick={refresh}
             className="rounded-xl border border-amber-500/40 bg-amber-500/15 px-5 py-2 text-sm font-medium text-amber-300 hover:bg-amber-500/25"
@@ -766,10 +771,10 @@ export function CantonBorrow() {
                           MAX
                         </button>
                       )}
-                      {action === "repay" && outstandingDebt > 0 && (
+                      {action === "repay" && outstandingDebt > 0 && repayMaxAmount > 0 && (
                         <button
                           className="rounded-lg bg-brand-500/20 px-3 py-1.5 text-xs font-semibold text-brand-400 transition-colors hover:bg-brand-500/30"
-                          onClick={() => setAmount(Math.min(userMusdBalance, outstandingDebt).toFixed(4))}
+                          onClick={() => setAmount(repayMaxAmount.toFixed(4))}
                         >
                           MAX
                         </button>
@@ -808,6 +813,12 @@ export function CantonBorrow() {
               {action === "deposit" && (
                 <p className="text-xs text-gray-500">
                   Contract-based routing is automatic. Enter an amount and the closest matching token contract is selected.
+                </p>
+              )}
+
+              {action === "repay" && outstandingDebt > 0 && largestMusdToken < outstandingDebt && largestMusdToken > 0 && (
+                <p className="text-xs text-gray-500">
+                  Repay uses one mUSD contract per transaction. MAX is capped to the largest available contract ({fmtAmount(largestMusdToken)} mUSD). Multiple transactions may be needed to fully clear your debt.
                 </p>
               )}
 

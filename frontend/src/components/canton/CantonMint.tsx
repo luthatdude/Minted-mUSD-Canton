@@ -9,6 +9,7 @@ import {
   type SimpleToken,
 } from "@/hooks/useCantonLedger";
 import WalletConnector from "@/components/WalletConnector";
+import { sanitizeCantonError } from "@/lib/canton-error";
 
 type CantonMintAsset = "USDC" | "USDCX" | "CANTON_COIN";
 
@@ -134,7 +135,8 @@ export function CantonMint() {
       setAmount("");
       await refresh();
     } catch (err: any) {
-      setError(err.message);
+      const { message } = sanitizeCantonError(err.message || "");
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -168,7 +170,8 @@ export function CantonMint() {
       setAmount("");
       await refresh();
     } catch (err: any) {
-      setError(err.message);
+      const { message } = sanitizeCantonError(err.message || "");
+      setError(message);
     } finally {
       setLoading(false);
     }
