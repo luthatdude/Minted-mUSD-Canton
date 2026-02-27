@@ -176,6 +176,20 @@ export const anomalyConsecutiveReverts = new Gauge({
   registers: [register],
 });
 
+/** Whether the configured Canton package ID is present on the ledger. */
+export const packageIdPresent = new Gauge({
+  name: "minted_relay_package_id_present",
+  help: "1 if configured Canton package ID is present on ledger, 0 otherwise",
+  registers: [register],
+});
+
+/** Whether a package ID mismatch has been detected. */
+export const packageMismatch = new Gauge({
+  name: "minted_relay_package_mismatch",
+  help: "1 if package ID mismatch detected, 0 otherwise",
+  registers: [register],
+});
+
 // ============================================================
 //  BRIDGE HARDENING — Per-direction & Canton API observability
 // ============================================================

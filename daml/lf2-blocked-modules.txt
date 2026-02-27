@@ -1,0 +1,15 @@
+# LF2-blocked DAML modules
+# These files contain contract-key declarations incompatible with LF 2.x.
+# They must NOT be compiled into LF2 DARs until refactored.
+# See docs/plans/daml-lf2-key-removal-plan.md for migration details.
+#
+# Format: one relative path per line (from repo root). Lines starting with # are comments.
+
+daml/CantonLending.daml
+daml/CantonBoostPool.daml
+daml/CantonLoopStrategy.daml
+daml/CantonLendingTest.daml
+daml/CantonBoostPoolTest.daml
+daml/CantonLoopStrategyTest.daml
+daml/CrossModuleIntegrationTest.daml
+daml/UserPrivacySettingsTest.daml

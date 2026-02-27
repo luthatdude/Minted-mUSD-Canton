@@ -35,6 +35,30 @@ function parseRecipientAliasMap(): Record<string, string> {
 
 const RECIPIENT_ALIAS_MAP = parseRecipientAliasMap();
 
+// ── Alias policy guard ──────────────────────────────────────────────
+// Block alias entries that map a non-operator key to the operator party.
+// This prevents accidentally routing all wallet queries through the operator,
+// which masks zero-balance issues and creates a privilege escalation risk.
+function validateAliasPolicyGuard(aliases: Record<string, string>): void {
+  if (process.env.ALLOW_OPERATOR_ALIAS_OVERRIDE === "true") return;
+  if (!CANTON_PARTY) return;
+
+  const operatorHint = CANTON_PARTY.split("::")[0];
+  for (const [from, to] of Object.entries(aliases)) {
+    const fromHint = from.split("::")[0];
+    const isFromOperator = fromHint === operatorHint;
+    const isToOperator = to === CANTON_PARTY || to.split("::")[0] === operatorHint;
+    if (!isFromOperator && isToOperator) {
+      throw new Error(
+        `[canton-party-resolver] ALIAS POLICY VIOLATION: Non-operator key "${from.slice(0, 24)}..." ` +
+        `maps to operator party. This masks real user balances. ` +
+        `Fix: map to the user's own funded party, or set ALLOW_OPERATOR_ALIAS_OVERRIDE=true to bypass.`
+      );
+    }
+  }
+}
+validateAliasPolicyGuard(RECIPIENT_ALIAS_MAP);
+
 export interface ResolvedParty {
   /** The party that was requested (after trim, before alias resolution). */
   requestedParty: string;
