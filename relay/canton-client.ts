@@ -67,6 +67,16 @@ export interface CantonClientConfig {
 }
 
 // ============================================================
+//                     OVERFLOW CONSTANTS
+// ============================================================
+
+/** Server-side limit for /v2/state/active-contracts responses */
+const ACTIVE_CONTRACTS_LIMIT = 200;
+
+/** Max pages of /v2/updates to consume during overflow replay */
+const MAX_UPDATE_PAGES = 50;
+
+// ============================================================
 //                     CLIENT
 // ============================================================
 
@@ -171,6 +181,137 @@ export class CantonClient {
   }
 
   // ----------------------------------------------------------
+  //  Overflow fallback: replay via /v2/updates
+  // ----------------------------------------------------------
+
+  /**
+   * Fallback when /v2/state/active-contracts overflows (>=200 entries or 413).
+   * Replays the transaction log via /v2/updates to reconstruct the full
+   * active contract set, paginating with beginExclusive.
+   */
+  private async replayViaUpdates<T = Record<string, unknown>>(
+    ledgerEnd: number,
+    templateId?: TemplateId | null,
+    payloadFilter?: (payload: T) => boolean,
+  ): Promise<ActiveContract<T>[]> {
+    type UpdateEntry = {
+      update: {
+        Transaction?: {
+          value: {
+            offset: number;
+            events: Array<{
+              CreatedEvent?: {
+                contractId: string;
+                templateId: string;
+                createArgument: T;
+                createdAt: string;
+                offset: number;
+                signatories: string[];
+                observers: string[];
+              };
+              ArchivedEvent?: {
+                contractId: string;
+                offset: number;
+              };
+            }>;
+          };
+        };
+      };
+    };
+
+    const filter = this.buildFilter(templateId);
+    const activeMap = new Map<string, ActiveContract<T>>();
+    let beginExclusive = 0;
+    let completed = false;
+
+    for (let page = 0; page < MAX_UPDATE_PAGES; page++) {
+      const updates = await this.request<UpdateEntry[]>("POST", "/v2/updates", {
+        filter,
+        beginExclusive,
+        endInclusive: ledgerEnd,
+      });
+
+      if (updates.length === 0) {
+        completed = true;
+        break;
+      }
+
+      // Compute max offset across all transactions in this page
+      let pageMaxOffset = beginExclusive;
+      for (const entry of updates) {
+        const tx = entry.update?.Transaction?.value;
+        if (!tx) continue;
+        if (tx.offset > pageMaxOffset) pageMaxOffset = tx.offset;
+      }
+
+      // No forward progress
+      if (pageMaxOffset <= beginExclusive) {
+        if (page === 0) {
+          throw new CantonApiError(0, "/v2/updates", "No offset progress during updates replay");
+        }
+        // Subsequent page returned stale data — we've consumed everything
+        completed = true;
+        break;
+      }
+
+      // Process only transactions newer than our cursor
+      for (const entry of updates) {
+        const tx = entry.update?.Transaction?.value;
+        if (!tx || tx.offset <= beginExclusive) continue;
+
+        for (const event of tx.events) {
+          if (event.ArchivedEvent) {
+            activeMap.delete(event.ArchivedEvent.contractId);
+          }
+          if (event.CreatedEvent) {
+            const evt = event.CreatedEvent;
+
+            // Client-side template filtering (same logic as queryContracts)
+            if (templateId) {
+              const parts = evt.templateId.split(":");
+              const mod = parts.length >= 3 ? parts[parts.length - 2] : "";
+              const ent = parts.length >= 3 ? parts[parts.length - 1] : "";
+              if (mod !== templateId.moduleName || ent !== templateId.entityName) {
+                continue;
+              }
+            }
+
+            const contract: ActiveContract<T> = {
+              contractId: evt.contractId,
+              templateId: evt.templateId,
+              payload: evt.createArgument,
+              createdAt: evt.createdAt,
+              offset: evt.offset,
+              signatories: evt.signatories,
+              observers: evt.observers,
+            };
+
+            if (payloadFilter && !payloadFilter(contract.payload)) {
+              continue;
+            }
+
+            activeMap.set(evt.contractId, contract);
+          }
+        }
+      }
+
+      // Reached ledger end
+      if (pageMaxOffset >= ledgerEnd) {
+        completed = true;
+        break;
+      }
+
+      beginExclusive = pageMaxOffset;
+    }
+
+    if (!completed) {
+      throw new CantonApiError(0, "/v2/updates", "Exceeded max update pages during updates replay");
+    }
+
+    return Array.from(activeMap.values());
+  }
+
+  // ----------------------------------------------------------
   //  Public API
   // ----------------------------------------------------------
 
@@ -215,7 +356,19 @@ export class CantonClient {
       };
     };
 
-    const entries = await this.request<RawEntry[]>("POST", "/v2/state/active-contracts", body);
+    let entries: RawEntry[];
+    try {
+      entries = await this.request<RawEntry[]>("POST", "/v2/state/active-contracts", body);
+    } catch (err) {
+      if (err instanceof CantonApiError && err.status === 413) {
+        return this.replayViaUpdates<T>(offset, templateId, payloadFilter);
+      }
+      throw err;
+    }
+
+    if (entries.length >= ACTIVE_CONTRACTS_LIMIT) {
+      return this.replayViaUpdates<T>(offset, templateId, payloadFilter);
+    }
 
     const contracts: ActiveContract<T>[] = [];
     for (const entry of entries) {
