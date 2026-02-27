@@ -61,6 +61,29 @@ function pickExactOrCoveringToken(tokens: SimpleToken[], requested: number): Sim
   return pickCoveringToken(tokens, requested);
 }
 
+/** Extract CantonSMUSD contract IDs created by a split command result. */
+function extractCreatedSmusdCids(result: unknown): Set<string> {
+  const cids = new Set<string>();
+  if (!result || typeof result !== "object") return cids;
+  function walk(node: unknown): void {
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    const rec = node as Record<string, unknown>;
+    // Match createdEvent shape: { contractId, templateId }
+    const evt = rec.createdEvent && typeof rec.createdEvent === "object"
+      ? (rec.createdEvent as Record<string, unknown>)
+      : rec;
+    const tid = typeof evt.templateId === "string" ? evt.templateId : "";
+    const cid = typeof evt.contractId === "string" ? evt.contractId : "";
+    if (cid && (tid === "CantonSMUSD" || tid.endsWith(":CantonSMUSD"))) {
+      cids.add(cid);
+    }
+    Object.values(rec).forEach((v) => { if (v && typeof v === "object") walk(v); });
+  }
+  walk(result);
+  return cids;
+}
+
 export function CantonStake() {
   const loopWallet = useLoopWallet();
   const activeParty = loopWallet.partyId || null;
@@ -395,10 +418,20 @@ export function CantonStake() {
           splitShares: parsedAmount.toString(),
         }, { party: fresh.party });
         if (!splitResp.success) throw new Error(splitResp.error || "Failed to split smUSD token.");
+        const createdSplitCids = extractCreatedSmusdCids(splitResp.result);
         const afterSplit = await fetchFreshBalances(activeParty);
         const splitTokens = afterSplit.smusdTokens || [];
-        const splitPiece = splitTokens.find(t => Math.abs(parseTokenAmount(t) - parsedAmount) <= 0.000001);
-        if (!splitPiece) throw new Error("Unable to find exact split smUSD token after split; aborting to prevent over-unstake.");
+        const candidates = createdSplitCids.size > 0
+          ? splitTokens.filter(t => createdSplitCids.has(t.contractId))
+          : splitTokens;
+        const splitPiece = candidates.find(t => Math.abs(parseTokenAmount(t) - parsedAmount) <= 0.000001);
+        if (!splitPiece) {
+          throw new Error(
+            createdSplitCids.size > 0
+              ? "Unable to locate exact split smUSD token among split-created contracts; aborting to prevent wrong-position unstake."
+              : "Unable to find exact split smUSD token after split; aborting to prevent over-unstake."
+          );
+        }
         unstakeCid = splitPiece.contractId;
         unstakeAmt = parseTokenAmount(splitPiece);
         // Refresh service CID (split may have consumed it)
