@@ -134,13 +134,13 @@ export function CantonStake() {
 
   const smusdSharePrice = stakingService ? parseFloat(stakingService.sharePrice) : 1.0;
   const smusdTVL = stakingService ? parseFloat(stakingService.pooledMusd) : 0;
-  const smusdApy = Math.max(0, (smusdSharePrice - 1) * 100);
+  const smusdTotalReturnPct = Math.max(0, (smusdSharePrice - 1) * 100);
   const smusdPositionValue = totalSmusd * smusdSharePrice;
 
   const ethPoolSharePrice = ethPoolService ? parseFloat(ethPoolService.sharePrice) : 1.0;
   const ethPoolTVL = ethPoolService ? parseFloat(ethPoolService.totalMusdStaked) : 0;
   const boostSharePrice = boostPoolService ? parseFloat(boostPoolService.globalSharePrice) : 1.0;
-  const boostApy = Math.max(0, (boostSharePrice - 1) * 100);
+  const boostTotalReturnPct = Math.max(0, (boostSharePrice - 1) * 100);
 
   async function selectTokenForRequestedAmount(
     party: string,
@@ -368,6 +368,7 @@ export function CantonStake() {
     setTxLoading(true); setTxError(null); setTxSuccess(null);
     try {
       if (!hasConnectedUserParty || !activeParty) throw new Error("Connect your Loop wallet party first.");
+      if (parsedAmount <= 0) throw new Error("Enter a valid smUSD amount to unstake.");
       // Fetch fresh data (Unstake is consuming on CantonStakingService)
       const fresh = await fetchFreshBalances(activeParty);
       let freshService = fresh.stakingService;
@@ -379,11 +380,42 @@ export function CantonStake() {
       const freshSmusd = fresh.smusdTokens || [];
       const smusd = freshSmusd[selectedAssetIdx] || freshSmusd[0];
       if (!smusd) throw new Error("No smUSD shares available");
+
+      const selectedAmt = parseTokenAmount(smusd);
+      if (parsedAmount > selectedAmt + EPSILON) {
+        throw new Error(`Requested ${fmtAmount(parsedAmount, 4)} smUSD exceeds selected position (${fmtAmount(selectedAmt, 4)} smUSD).`);
+      }
+
+      let unstakeCid = smusd.contractId;
+      let unstakeAmt = selectedAmt;
+
+      // Partial unstake: split the smUSD token first
+      if (parsedAmount < selectedAmt - EPSILON) {
+        const splitResp = await cantonExercise("CantonSMUSD", smusd.contractId, "SMUSD_Split", {
+          splitShares: parsedAmount.toString(),
+        }, { party: fresh.party });
+        if (!splitResp.success) throw new Error(splitResp.error || "Failed to split smUSD token.");
+        const afterSplit = await fetchFreshBalances(activeParty);
+        const splitTokens = afterSplit.smusdTokens || [];
+        const splitPiece = splitTokens.find(t => Math.abs(parseTokenAmount(t) - parsedAmount) <= 0.000001);
+        if (!splitPiece) throw new Error("Unable to find exact split smUSD token after split; aborting to prevent over-unstake.");
+        unstakeCid = splitPiece.contractId;
+        unstakeAmt = parseTokenAmount(splitPiece);
+        // Refresh service CID (split may have consumed it)
+        freshService = afterSplit.stakingService || freshService;
+        if (!freshService) {
+          const opF = await fetchFreshBalances(null).catch(() => null);
+          freshService = opF?.stakingService || null;
+        }
+        if (!freshService) throw new Error("Staking service not found after split");
+      }
+
       const resp = await cantonExercise("CantonStakingService", freshService.contractId, "Unstake", {
-        user: fresh.party, smusdCid: smusd.contractId,
+        user: fresh.party, smusdCid: unstakeCid,
       }, { party: fresh.party });
       if (!resp.success) throw new Error(resp.error || "Unstake failed");
-      setTxSuccess(`Unstaked ${fmtAmount(smusd.amount)} smUSD → mUSD`);
+      setTxSuccess(`Unstaked ${fmtAmount(unstakeAmt, 4)} smUSD → mUSD`);
+      setAmount("");
       await refresh(); void loadPreflight();
     } catch (err: any) { setTxError(sanitizeCantonError(err.message || "").message); }
     finally { setTxLoading(false); }
@@ -769,7 +801,7 @@ export function CantonStake() {
                         <div className="space-y-3">
                           <label className="text-sm font-medium text-gray-400">Select smUSD Position to Unstake</label>
                           {smusdTokens.map((smusd, idx) => (
-                            <button key={smusd.contractId} onClick={() => setSelectedAssetIdx(idx)}
+                            <button key={smusd.contractId} onClick={() => { setSelectedAssetIdx(idx); setAmount(""); }}
                               className={`w-full rounded-xl border p-4 text-left transition-all ${selectedAssetIdx === idx ? "border-emerald-500 bg-emerald-500/10" : "border-white/10 bg-surface-800/50 hover:border-white/30"}`}>
                               <div className="flex items-center justify-between">
                                 <div>
@@ -780,7 +812,38 @@ export function CantonStake() {
                               </div>
                             </button>
                           ))}
-                          <TxButton onClick={handleSmusdUnstake} loading={txLoading} disabled={smusdTokens.length === 0} className="w-full">
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <label className="text-sm font-medium text-gray-400">Unstake Amount</label>
+                              <span className="text-xs text-gray-500">
+                                Position: {fmtAmount(smusdTokens[selectedAssetIdx]?.amount || smusdTokens[0]?.amount || "0", 4)} smUSD
+                              </span>
+                            </div>
+                            <div className="relative rounded-xl border border-white/10 bg-surface-800/50 p-4 transition-all duration-300 focus-within:border-emerald-500/50 focus-within:shadow-[0_0_20px_-5px_rgba(16,185,129,0.3)]">
+                              <div className="flex items-center gap-4">
+                                <input
+                                  type="number"
+                                  className="flex-1 bg-transparent text-2xl font-semibold text-white placeholder-gray-600 focus:outline-none"
+                                  placeholder="0.00"
+                                  value={amount}
+                                  onChange={(e) => setAmount(e.target.value)}
+                                />
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    className="rounded-lg bg-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-400 transition-colors hover:bg-emerald-500/30"
+                                    onClick={() => setAmount(smusdTokens[selectedAssetIdx]?.amount || smusdTokens[0]?.amount || "0")}
+                                  >
+                                    MAX
+                                  </button>
+                                  <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
+                                    <div className="h-6 w-6 rounded-full bg-gradient-to-br from-emerald-500 to-teal-500" />
+                                    <span className="font-semibold text-white">smUSD</span>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                          <TxButton onClick={handleSmusdUnstake} loading={txLoading} disabled={smusdTokens.length === 0 || parsedAmount <= 0} className="w-full">
                             <span className="flex items-center justify-center gap-2">
                               Unstake smUSD → mUSD
                             </span>
@@ -798,7 +861,7 @@ export function CantonStake() {
               <div className="space-y-4">
                 <div className="grid gap-4 grid-cols-2">
                   <StatCard label="Share Price" value={`${smusdSharePrice.toFixed(4)} mUSD`} subValue="per smUSD" color="green" />
-                  <StatCard label="Estimated APY" value={`${smusdApy.toFixed(2)}%`} color="green" />
+                  <StatCard label="Total Return" value={`${smusdTotalReturnPct.toFixed(2)}%`} color="green" />
                   <StatCard label="Available mUSD" value={hasConnectedUserParty ? fmtAmount(totalMusd) : "—"} subValue={hasConnectedUserParty ? `${tokens.length} contracts` : "Connect wallet"} color="blue" />
                   <StatCard label="Your smUSD" value={hasConnectedUserParty ? fmtAmount(totalSmusd, 4) : "—"} subValue={hasConnectedUserParty && totalSmusd > 0 ? `\u2248 ${fmtAmount(smusdPositionValue)} mUSD` : hasConnectedUserParty ? undefined : "Connect wallet"} color="purple" />
                 </div>
@@ -990,7 +1053,7 @@ export function CantonStake() {
               <div className="space-y-4">
                 <div className="grid gap-4 grid-cols-2">
                   <StatCard label="Share Price" value={`${ethPoolSharePrice.toFixed(4)} mUSD`} subValue="per smUSD-E" color="blue" />
-                  <StatCard label="Estimated APY %" value={`${Math.max(0, (ethPoolSharePrice - 1) * 100).toFixed(2)}%`} color="green" />
+                  <StatCard label="Total Return" value={`${Math.max(0, (ethPoolSharePrice - 1) * 100).toFixed(2)}%`} color="green" />
                   <StatCard
                     label="Your mUSD Balance"
                     value={hasConnectedUserParty ? fmtAmount(totalMusd) : "—"}
@@ -1199,7 +1262,7 @@ export function CantonStake() {
                   <StatCard label="CTN Price" value={`${parseFloat(boostPoolService.cantonPriceMusd).toFixed(4)} mUSD`} color="yellow" />
                   <StatCard label="Share Price" value={`${parseFloat(boostPoolService.globalSharePrice).toFixed(4)}`} subValue="per Boost LP" color="green" />
                   <StatCard label="Total CTN Deposited" value={fmtAmount(boostPoolService.totalCantonDeposited)} color="blue" />
-                  <StatCard label="APY" value={`${boostApy.toFixed(2)}%`} color="purple" />
+                  <StatCard label="Total Return" value={`${boostTotalReturnPct.toFixed(2)}%`} color="purple" />
                 </div>
                 <div className="card overflow-hidden">
                   <h3 className="text-sm font-medium text-gray-400 mb-3">Your Boost Positions</h3>

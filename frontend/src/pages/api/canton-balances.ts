@@ -334,7 +334,7 @@ export default async function handler(
     };
     const matchesOperatorIssuer = (payload: Record<string, unknown>): boolean => {
       const issuer = (payload.issuer as string) || "";
-      return !issuer || issuer === CANTON_PARTY;
+      return issuer === CANTON_PARTY;
     };
 
     for (const entry of entries) {

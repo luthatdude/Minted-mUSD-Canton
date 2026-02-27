@@ -308,6 +308,17 @@ export function CantonBorrow() {
     setResult(null);
   }
 
+  async function ensureFreshPrices(): Promise<void> {
+    const priceResult = await refreshPriceFeeds();
+    if (!priceResult.success) {
+      throw new Error(
+        priceResult.error
+          ? `Failed to refresh price feeds: ${priceResult.error}`
+          : "Failed to refresh price feeds. Please try again."
+      );
+    }
+  }
+
   async function handleAction() {
     if (!activeParty || !hasConnectedUserParty) {
       setTxError("Connect your Loop wallet first.");
@@ -340,10 +351,11 @@ export function CantonBorrow() {
         const selected = pickContractForAmount(available, parsedAmount);
         if (!selected) {
           const maxAvailable = available.reduce((max, token) => Math.max(max, parseFloat(token.amount || "0")), 0);
+          const sym = COLLATERAL_META[collateralAsset].symbol;
           throw new Error(
             maxAvailable > 0
-              ? `No ${COLLATERAL_META[collateralAsset].symbol} contract large enough. Largest available is ${fmtAmount(maxAvailable)}.`
-              : `No ${COLLATERAL_META[collateralAsset].symbol} contracts available to deposit.`
+              ? `No single ${sym} contract covers ${fmtAmount(parsedAmount)}. Largest single contract: ${fmtAmount(maxAvailable)} ${sym}. Use an amount <= ${fmtAmount(maxAvailable)} or consolidate your ${sym} tokens first.`
+              : `No ${sym} contracts available to deposit.`
           );
         }
 
@@ -365,7 +377,7 @@ export function CantonBorrow() {
           throw new Error("Deposit collateral first.");
         }
 
-        await refreshPriceFeeds();
+        await ensureFreshPrices();
         const postRefresh = await fetchFreshBalances(activeParty);
         const postRefreshOperator = await fetchFreshBalances(null).catch(() => operatorFresh);
         const postRefreshEscrows = (postRefresh.escrowPositions || []).filter((row) => row.owner === activeParty);
@@ -481,7 +493,7 @@ export function CantonBorrow() {
           throw new Error("Enter a valid withdraw amount.");
         }
 
-        await refreshPriceFeeds();
+        await ensureFreshPrices();
         const postRefresh = await fetchFreshBalances(activeParty);
         const postRefreshOperator = await fetchFreshBalances(null).catch(() => operatorFresh);
 
@@ -489,6 +501,7 @@ export function CantonBorrow() {
         const postRefreshEscrows = (postRefresh.escrowPositions || []).filter((row) => row.owner === activeParty);
         const escrow = pickEscrowForWithdraw(postRefreshEscrows, collateralType, parsedAmount);
         if (!escrow) {
+          const sym = COLLATERAL_META[collateralAsset].symbol;
           const sameTypeRows = postRefreshEscrows.filter((row) => row.collateralType === collateralType);
           const maxAvailable = sameTypeRows.reduce((max, row) => Math.max(max, parseFloat(row.amount || "0")), 0);
           const availableTypes = Array.from(
@@ -501,10 +514,10 @@ export function CantonBorrow() {
           );
           throw new Error(
             maxAvailable > 0
-              ? `No ${COLLATERAL_META[collateralAsset].symbol} escrow can cover ${fmtAmount(parsedAmount)}. Largest is ${fmtAmount(maxAvailable)}.`
+              ? `No single ${sym} escrow covers ${fmtAmount(parsedAmount)}. Largest single escrow: ${fmtAmount(maxAvailable)} ${sym}. Use an amount <= ${fmtAmount(maxAvailable)} or consolidate your escrow positions first.`
               : availableTypes.length > 0
-                ? `No active ${COLLATERAL_META[collateralAsset].symbol} escrow positions found. Available escrow types: ${availableTypes.join(", ")}.`
-                : `No active ${COLLATERAL_META[collateralAsset].symbol} escrow positions found.`
+                ? `No active ${sym} escrow positions found. Available escrow types: ${availableTypes.join(", ")}.`
+                : `No active ${sym} escrow positions found.`
           );
         }
 

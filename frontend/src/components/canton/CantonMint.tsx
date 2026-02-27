@@ -33,7 +33,7 @@ async function selectTokenForAmount(
     const largest = tokensList.reduce((max, t) => Math.max(max, parseFloat(t.amount || "0")), 0);
     throw new Error(
       largest > 0
-        ? `No ${symbol} contract large enough. Largest available is ${largest.toFixed(2)} ${symbol}.`
+        ? `No single ${symbol} contract covers ${requested.toFixed(2)} ${symbol}. Largest single contract: ${largest.toFixed(2)} ${symbol}. Use an amount <= ${largest.toFixed(2)} or consolidate your ${symbol} tokens first.`
         : `No ${symbol} token available.`
     );
   }
