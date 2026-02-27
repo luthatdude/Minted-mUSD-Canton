@@ -224,9 +224,22 @@ export default async function handler(
         return res.status(400).json({ error: "Missing contractId or choice" });
       }
 
+      // Operator-signatory services (Stake, Unstake, etc.) require operator in actAs
+      // so the submitter can see the contract and the choice body has operator authority
+      // for archiving/creating operator-signed sub-contracts.
+      const needsOperatorActAs = new Set([
+        "Stake", "Unstake", "StakeFromInventory",
+        "ETHPool_StakeWithMusd", "ETHPool_StakeWithUSDC", "ETHPool_StakeWithCantonCoin", "ETHPool_Unstake",
+        "BoostPool_Deposit", "BoostPool_Withdraw",
+        "CantonMUSD_Split", "CantonMUSD_Merge", "CantonMUSD_Burn",
+      ]);
+      const exerciseActAs = needsOperatorActAs.has(choice)
+        ? Array.from(new Set([actAsParty, operatorParty]))
+        : [actAsParty];
+
       const body = {
         userId: getCantonUser(),
-        actAs: [actAsParty],
+        actAs: exerciseActAs,
         readAs: baseReadAsParties,
         commandId,
         commands: [
