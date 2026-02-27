@@ -50,3 +50,10 @@ nohup.out
 *.bak
 *.bak2
 .next/
+
+# Generated build artifacts (must not be tracked)
+relay/dist/
+frontend/tsconfig.tsbuildinfo
+
+# macOS
+.DS_Store
