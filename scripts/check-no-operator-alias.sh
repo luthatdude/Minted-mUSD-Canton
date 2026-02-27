@@ -48,6 +48,20 @@ if [ ${#FILES[@]} -eq 0 ]; then
   exit 0
 fi
 
+# Extract the effective value of an env variable from a file.
+# Supports: VARNAME=val, export VARNAME=val, whitespace around '='.
+# Skips commented lines. Returns LAST active assignment (shell semantics).
+# Portable: no grep -P.
+extract_env_value() {
+  local varname="$1"
+  local file="$2"
+  grep -E "^[[:space:]]*(export[[:space:]]+)?${varname}[[:space:]]*=" "$file" 2>/dev/null \
+    | grep -v '^[[:space:]]*#' \
+    | tail -1 \
+    | sed 's/^[^=]*=[[:space:]]*//' \
+    || true
+}
+
 # Check each file for alias policy violations
 check_alias_json() {
   local file="$1"
@@ -89,17 +103,16 @@ for file in "${FILES[@]}"; do
   filepath="$REPO_ROOT/$file"
   [ -f "$filepath" ] || continue
 
-  # Extract CANTON_RECIPIENT_PARTY_ALIASES value (portable: no grep -P)
-  # || true: no-match is expected for files without this var (pipefail would abort otherwise)
-  alias_val=$(grep 'CANTON_RECIPIENT_PARTY_ALIASES=' "$filepath" 2>/dev/null | grep -v 'NEXT_PUBLIC' | head -1 | sed 's/[^=]*=//' || true)
+  # Extract last active CANTON_RECIPIENT_PARTY_ALIASES assignment
+  alias_val=$(extract_env_value "CANTON_RECIPIENT_PARTY_ALIASES" "$filepath")
   if [ -n "$alias_val" ]; then
     if ! check_alias_json "$file" "CANTON_RECIPIENT_PARTY_ALIASES" "$alias_val"; then
       ERRORS=$((ERRORS + 1))
     fi
   fi
 
-  # Extract NEXT_PUBLIC_CANTON_PARTY_ALIASES_JSON value (portable: no grep -P)
-  pub_alias_val=$(grep 'NEXT_PUBLIC_CANTON_PARTY_ALIASES_JSON=' "$filepath" 2>/dev/null | head -1 | sed 's/[^=]*=//' || true)
+  # Extract last active NEXT_PUBLIC_CANTON_PARTY_ALIASES_JSON assignment
+  pub_alias_val=$(extract_env_value "NEXT_PUBLIC_CANTON_PARTY_ALIASES_JSON" "$filepath")
   if [ -n "$pub_alias_val" ]; then
     if ! check_alias_json "$file" "NEXT_PUBLIC_CANTON_PARTY_ALIASES_JSON" "$pub_alias_val"; then
       ERRORS=$((ERRORS + 1))

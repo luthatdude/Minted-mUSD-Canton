@@ -67,8 +67,8 @@ echo "=== Check 2: No non-blocked files import blocked modules ==="
 IMPORT_ERRORS=0
 
 # Only check the three primary blocked modules (not test files)
-# Match plain and parenthesized forms: import Mod, import Mod (...), import Mod -- comment
-IMPORT_PATTERN="^[[:space:]]*import[[:space:]]+(CantonLending|CantonBoostPool|CantonLoopStrategy)([[:space:]]|$)"
+# Match: import Mod, import Mod (...), import qualified Mod as X, import Mod -- comment
+IMPORT_PATTERN="^[[:space:]]*import[[:space:]]+(qualified[[:space:]]+)?(CantonLending|CantonBoostPool|CantonLoopStrategy)([[:space:]]|$)"
 
 for daml_file in "$REPO_ROOT"/daml/*.daml; do
   [ -f "$daml_file" ] || continue
