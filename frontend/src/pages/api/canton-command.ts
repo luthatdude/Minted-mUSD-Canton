@@ -6,6 +6,7 @@ import {
   getCantonParty,
   getCantonUser,
   getPackageId,
+  getLendingPackageId,
   validateConfig,
   PKG_ID_PATTERN,
   guardMethod,
@@ -37,6 +38,7 @@ const ALLOW_OPERATOR_FALLBACK =
  */
 function buildTemplateMap(): Record<string, string> {
   const pkgId = getPackageId();
+  const lendingPkgId = getLendingPackageId();
   return {
     // CantonDirectMint module
     CantonMUSD:              `${pkgId}:CantonDirectMint:CantonMUSD`,
@@ -53,11 +55,11 @@ function buildTemplateMap(): Record<string, string> {
     // CantonBoostPool module
     CantonBoostPoolService:  `${pkgId}:CantonBoostPool:CantonBoostPoolService`,
     BoostPoolLP:             `${pkgId}:CantonBoostPool:BoostPoolLP`,
-    // CantonLending module
-    CantonLendingService:    `${pkgId}:CantonLending:CantonLendingService`,
-    CantonPriceFeed:         `${pkgId}:CantonLending:CantonPriceFeed`,
-    EscrowedCollateral:      `${pkgId}:CantonLending:EscrowedCollateral`,
-    CantonDebtPosition:      `${pkgId}:CantonLending:CantonDebtPosition`,
+    // CantonLending module (separate package — LF2-compatible build)
+    CantonLendingService:    `${lendingPkgId}:CantonLending:CantonLendingService`,
+    CantonPriceFeed:         `${lendingPkgId}:CantonLending:CantonPriceFeed`,
+    EscrowedCollateral:      `${lendingPkgId}:CantonLending:EscrowedCollateral`,
+    CantonDebtPosition:      `${lendingPkgId}:CantonLending:CantonDebtPosition`,
     // CantonCoinToken module
     CantonCoin:              `${pkgId}:CantonCoinToken:CantonCoin`,
     // CantonCoinMint module
@@ -224,9 +226,22 @@ export default async function handler(
         return res.status(400).json({ error: "Missing contractId or choice" });
       }
 
+      // Operator-signatory services (Stake, Unstake, etc.) require operator in actAs
+      // so the submitter can see the contract and the choice body has operator authority
+      // for archiving/creating operator-signed sub-contracts.
+      const needsOperatorActAs = new Set([
+        "Stake", "Unstake", "StakeFromInventory",
+        "ETHPool_StakeWithMusd", "ETHPool_StakeWithUSDC", "ETHPool_StakeWithCantonCoin", "ETHPool_Unstake",
+        "BoostPool_Deposit", "BoostPool_Withdraw",
+        "CantonMUSD_Split", "CantonMUSD_Merge", "CantonMUSD_Burn",
+      ]);
+      const exerciseActAs = needsOperatorActAs.has(choice)
+        ? Array.from(new Set([actAsParty, operatorParty]))
+        : [actAsParty];
+
       const body = {
         userId: getCantonUser(),
-        actAs: [actAsParty],
+        actAs: exerciseActAs,
         readAs: baseReadAsParties,
         commandId,
         commands: [

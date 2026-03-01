@@ -1,0 +1,17 @@
+# LF2-blocked DAML modules
+# These files contain contract-key declarations incompatible with LF 2.x.
+# They must NOT be compiled into LF2 DARs until refactored.
+# See docs/plans/daml-lf2-key-removal-plan.md for migration details.
+#
+# Format: one relative path per line (from repo root). Lines starting with # are comments.
+
+# daml/CantonLending.daml       -- UNBLOCKED: contract keys removed (LF2 migration complete)
+# daml/CantonBoostPool.daml     -- UNBLOCKED: no key declarations found; LF2 safe
+# daml/CantonLoopStrategy.daml  -- UNBLOCKED: no key declarations found; LF2 safe
+# daml/CantonLendingTest.daml   -- UNBLOCKED: imports only LF2-safe modules
+# daml/CantonBoostPoolTest.daml -- UNBLOCKED: imports only LF2-safe modules
+# daml/CantonLoopStrategyTest.daml    -- UNBLOCKED: imports only LF2-safe modules
+# daml/CrossModuleIntegrationTest.daml -- UNBLOCKED: imports only LF2-safe modules
+# daml/UserPrivacySettingsTest.daml    -- UNBLOCKED: imports only LF2-safe modules
+#
+# ALL MODULES UNBLOCKED — LF2 migration complete (2026-03-01)

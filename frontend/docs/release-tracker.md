@@ -1,5 +1,45 @@
 # Release Tracker
 
+## 2026-03-01 — LF2 Key-Removal Migration + UX Reliability Hardening
+
+**Release:** Complete LF2 contract key removal, UX reliability fixes, relay hardening
+**Branch:** `fix/canton-ux-reliability-hardening`
+**Commit:** [`7eef3b63`](https://github.com/luthatdude/Minted-mUSD-Canton/commit/7eef3b63)
+
+### Summary
+
+- Removed all 8 contract key declarations from CantonLending DAML templates (LF2 compliance)
+- Added explicit ContractId passing (`existingEscrowCid`, `collateralAggCid`) to lending deposit choices
+- Separated lending package ID (`CANTON_LENDING_PACKAGE_ID`) for independent versioning
+- Unblocked all 8 modules from `lf2-blocked-modules.txt`; version bump 1.0.0 → 1.1.0
+- Sanitized all CantonStake error paths (no raw DAML/gRPC leaks to UI)
+- Prevented over-unstake via covering-token fallback
+- Bound partial smUSD unstake to split-created CIDs
+- Relay: overflow fallback replay for ACS queries
+- Relay: RC1 retry condition fix for `COMMAND_PREPROCESSING_FAILED`
+- Added LF2 guard scripts and CI job for key-declaration regression prevention
+
+### Validation
+
+| Gate | Result |
+|------|--------|
+| `daml-lf2-guard.sh` | PASS (0 blocked modules, 0 key declarations) |
+| `check-no-operator-alias.sh` | PASS |
+| Frontend `tsc --noEmit` | PASS |
+| Relay `tsc --noEmit` | PASS |
+| Relay tests (jest) | 51/51 PASS |
+| DAML full build (CI) | Pending CI run |
+| Batch soak audit (Agent C) | GO — 6/6 ops, 6/6 runtime proofs, 2/2 idempotency |
+
+### Post-Merge
+
+- [ ] Deploy ble-protocol 1.1.0 DAR to devnet
+- [ ] Update CI to use direct `daml build` instead of `daml-build-lf2.sh`
+- [ ] T+1h `ops:check24h`
+- [ ] T+24h `ops:check24h`
+
+---
+
 ## 2026-02-26 — Canton Party Identity Unification
 
 **Release:** Unified party resolution across all Canton API routes + UI identity transparency

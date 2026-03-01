@@ -74,6 +74,8 @@ import {
   directionStatus as metricDirectionStatus,
   directionConsecutiveFailures as metricDirectionConsecutiveFailures,
   orphanRecoveryTotal,
+  packageIdPresent as metricPackageIdPresent,
+  packageMismatch as metricPackageMismatch,
 } from "./metrics";
 
 // INFRA-H-06: Ensure TLS certificate validation is enforced at process level
@@ -149,6 +151,8 @@ interface RelayConfig {
   cantonUsdcxIssuer: string;
   cantonMpaHash: string;
   cantonMpaUri: string;
+  // Canton package ID for template queries — must match deployed DAR
+  cantonPackageId: string;
 }
 
 const DEFAULT_CONFIG: RelayConfig = {
@@ -278,6 +282,21 @@ const DEFAULT_CONFIG: RelayConfig = {
   cantonUsdcxIssuer: process.env.CANTON_USDCX_ISSUER || process.env.CANTON_PARTY || "",
   cantonMpaHash: process.env.CANTON_MPA_HASH || "minted:default-mpa:v1",
   cantonMpaUri: process.env.CANTON_MPA_URI || "https://minted.protocol/legal/mpa-v1",
+  cantonPackageId: (() => {
+    const raw = process.env.CANTON_PACKAGE_ID || "";
+    if (!raw) {
+      throw new Error(
+        "CANTON_PACKAGE_ID is required. Set it to the 64-char hex hash of the deployed DAR. " +
+        "Find it via: curl <canton-host>:7575/v2/packages | jq '.packageIds[]'"
+      );
+    }
+    if (!/^[0-9a-fA-F]{64}$/.test(raw)) {
+      throw new Error(
+        `CANTON_PACKAGE_ID must be 64 hex characters, got: "${raw.slice(0, 20)}..." (${raw.length} chars)`
+      );
+    }
+    return raw;
+  })(),
 };
 
 // ============================================================
@@ -638,6 +657,17 @@ class RelayService {
   private directionHealth: Record<string, { status: 0 | 1 | 2; consecutiveFailures: number }> = {};
   private pollCycleCount = 0;
 
+  // ── Package ID mismatch tracking ──────────────────────────────────
+  private packageMismatchState: {
+    active: boolean;
+    configuredId: string;
+    detectedAt: string | null;
+    reason: string | null;
+  } = { active: false, configuredId: "", detectedAt: null, reason: null };
+  private readonly PACKAGE_CHECK_INTERVAL_CYCLES = parseInt(
+    process.env.RELAY_PACKAGE_CHECK_INTERVAL_CYCLES || "60", 10
+  );
+
   // ── H-1: Rate limiting ──────────────────────────────────────────────
   // Per-block and per-minute caps to prevent relay DoS / spam
   private rateLimiter = {
@@ -700,7 +730,7 @@ class RelayService {
       userId: process.env.CANTON_USER_ID || "administrator",
       actAs: config.cantonParty,
       timeoutMs: 30_000,
-      defaultPackageId: process.env.CANTON_PACKAGE_ID || "",
+      defaultPackageId: config.cantonPackageId,
     });
 
     // Initialize Ethereum connection
@@ -725,6 +755,7 @@ class RelayService {
     // Sanitize RPC URL in logs to prevent API key leakage
     console.log(`[Relay] Ethereum: ${sanitizeUrl(config.ethereumRpcUrl)}`);
     console.log(`[Relay] Bridge: ${config.bridgeContractAddress}`);
+    console.log(`[Relay] Package ID: ${config.cantonPackageId?.slice(0, 16) || "(not set)"}...`);
     if (Object.keys(config.recipientPartyAliases).length > 0) {
       console.log(
         `[Relay] Recipient alias mappings loaded: ${Object.keys(config.recipientPartyAliases).length}`
@@ -740,6 +771,67 @@ class RelayService {
     }
   }
 
+  /**
+   * Verify configured package ID exists on the Canton ledger.
+   * Sets mismatch state if the package is not found.
+   */
+  async verifyConfiguredPackageIdOnLedger(): Promise<boolean> {
+    const configuredId = this.config.cantonPackageId;
+    try {
+      const packages: string[] = await this.canton.listPackages();
+      const found = packages.includes(configuredId);
+      if (found) {
+        this.packageMismatchState = {
+          active: false,
+          configuredId,
+          detectedAt: null,
+          reason: null,
+        };
+        metricPackageIdPresent.set(1);
+        metricPackageMismatch.set(0);
+        return true;
+      }
+      const sample = packages.slice(0, 3).map((p) => p.slice(0, 16) + "...").join(", ");
+      const reason = `Configured package ID ${configuredId.slice(0, 16)}... not found among ${packages.length} packages. First few: [${sample}]`;
+      console.error(`[Relay] PACKAGE MISMATCH: ${reason}`);
+      this.packageMismatchState = {
+        active: true,
+        configuredId,
+        detectedAt: new Date().toISOString(),
+        reason,
+      };
+      metricPackageIdPresent.set(0);
+      metricPackageMismatch.set(1);
+      return false;
+    } catch (error: any) {
+      console.error(`[Relay] Failed to verify package ID: ${error?.message?.slice(0, 150)}`);
+      return true; // fail-open on transient errors — don't block startup for network blips
+    }
+  }
+
+  /** Mark package mismatch from template-not-found errors during operation. */
+  private flagPackageMismatchFromTemplateError(errorMsg: string): void {
+    if (!this.packageMismatchState.active) {
+      this.packageMismatchState = {
+        active: true,
+        configuredId: this.config.cantonPackageId,
+        detectedAt: new Date().toISOString(),
+        reason: `TEMPLATES_OR_INTERFACES_NOT_FOUND: ${errorMsg.slice(0, 200)}`,
+      };
+      metricPackageIdPresent.set(0);
+      metricPackageMismatch.set(1);
+      console.error(
+        `[Relay] Package mismatch flagged from template error. ` +
+        `Configured: ${this.config.cantonPackageId.slice(0, 16)}...`
+      );
+    }
+  }
+
+  /** Get package mismatch state for health endpoint. */
+  getPackageMismatchState() {
+    return { ...this.packageMismatchState };
+  }
+
   private cantonBaseUrl(): string {
     const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
     return `${protocol}://${this.config.cantonHost}:${this.config.cantonPort}`;
@@ -753,7 +845,7 @@ class RelayService {
       actAs: party,
       readAs,
       timeoutMs: 30_000,
-      defaultPackageId: process.env.CANTON_PACKAGE_ID || "",
+      defaultPackageId: this.config.cantonPackageId,
     });
   }
 
@@ -1138,6 +1230,16 @@ class RelayService {
     // Validate validator addresses against on-chain roles before starting
     await this.validateValidatorAddresses();
 
+    // Verify configured package ID exists on Canton ledger
+    const packagePresent = await this.verifyConfiguredPackageIdOnLedger();
+    const strictCheck = process.env.RELAY_STRICT_PACKAGE_CHECK !== "false";
+    if (!packagePresent && strictCheck) {
+      throw new Error(
+        `STARTUP BLOCKED: Configured CANTON_PACKAGE_ID (${this.config.cantonPackageId.slice(0, 16)}...) ` +
+        `not found on ledger. Set RELAY_STRICT_PACKAGE_CHECK=false to override.`
+      );
+    }
+
     // Ensure baseline Canton contracts exist (idempotent, query-first).
     await this.ensureLedgerContracts();
     
@@ -1249,6 +1351,11 @@ class RelayService {
         }
       } else {
         this.consecutiveFailures = 0;
+      }
+
+      // Periodic package ID recheck to detect drift
+      if (this.pollCycleCount % this.PACKAGE_CHECK_INTERVAL_CYCLES === 0) {
+        await this.verifyConfiguredPackageIdOnLedger();
       }
 
       this.updateMetricsSnapshot();
@@ -2188,8 +2295,8 @@ class RelayService {
               msg.includes("INVALID_ARGUMENT") &&
               (msg.includes("validators") || msg.includes("requiredSignatures") || msg.includes("requiredSignaturesvalidators"));
             const missingExtendedFields =
-              msg.includes("INVALID_ARGUMENT") &&
-              msg.includes("Missing fields") &&
+              (msg.includes("INVALID_ARGUMENT") || msg.includes("COMMAND_PREPROCESSING_FAILED")) &&
+              (msg.includes("Missing fields") || msg.includes("Missing non-optional field")) &&
               (msg.includes("validators") || msg.includes("requiredSignatures"));
 
             if (usedExtended && hasUnexpectedExtendedFields) {
@@ -3380,6 +3487,7 @@ class RelayService {
           this.warnedRedemptionMarkerUnavailable = true;
         }
         this.redemptionSettlementMarkerSupported = false;
+        this.flagPackageMismatchFromTemplateError(msg);
         return;
       }
       console.warn(`[Relay] Failed to load redemption settlement markers: ${msg}`);
@@ -3428,6 +3536,7 @@ class RelayService {
           this.warnedRedemptionMarkerUnavailable = true;
         }
         this.redemptionSettlementMarkerSupported = false;
+        this.flagPackageMismatchFromTemplateError(msg);
         return false;
       }
       console.warn(
@@ -4379,11 +4488,20 @@ function startHealthServer(port: number, relay: RelayService): http.Server {
     }
 
     if (req.url === "/health") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({
-        status: "ok",
+      const mismatch = relay.getPackageMismatchState();
+      const statusCode = mismatch.active ? 503 : 200;
+      const body: Record<string, unknown> = {
+        status: mismatch.active ? "degraded" : "ok",
         timestamp: new Date().toISOString(),
-      }));
+        packageIdConfigured: mismatch.configuredId || "(unknown)",
+        packageIdPresent: !mismatch.active,
+        packageCheckAt: mismatch.detectedAt || new Date().toISOString(),
+      };
+      if (mismatch.active && mismatch.reason) {
+        body.mismatchReason = mismatch.reason;
+      }
+      res.writeHead(statusCode, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(body));
     } else if (req.url === "/metrics") {
       (relay as any).updateMetricsSnapshot();
       await metricsHandler(req, res);

@@ -277,7 +277,9 @@ npm run ops:topup -- --target 2000 --chunk 250 --execute --mode protocol
 
 **Cause:** The configured package ID does not match any DAR uploaded to the participant.
 
-**Fix:**
+**Diagnosis:**
+
+**Frontend:**
 1. Check current packages: `curl http://localhost:7575/v2/packages`
 2. Compare against `.env.local`:
    - `NEXT_PUBLIC_DAML_PACKAGE_ID` — should match the ble-protocol DAR
@@ -287,6 +289,15 @@ npm run ops:topup -- --target 2000 --chunk 250 --execute --mode protocol
    unzip -p path/to/ble-protocol-*.dar META-INF/MANIFEST.MF | grep Main-Dalf-Name
    ```
 4. Update `.env.local` and restart the dev server.
+
+**Relay:**
+1. Check relay health: `curl http://localhost:18080/health`
+   - If `status: "degraded"` and `packageIdPresent: false`, the relay has detected the mismatch.
+   - `mismatchReason` shows the configured vs. discovered package IDs.
+2. Check relay env: `CANTON_PACKAGE_ID` in `relay/.env.development` must match the deployed DAR.
+3. Stale package ID `f9481d29...` was from a pre-devnet-reset build — if seen, update to the current live ID.
+4. After fixing, restart relay: `launchctl kickstart -k gui/$(id -u)/com.minted.relay`
+5. Verify: `curl http://localhost:18080/health` should return `status: "ok"`, `packageIdPresent: true`.
 
 ## Canton Party Identity Policy
 

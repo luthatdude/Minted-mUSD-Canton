@@ -56,6 +56,26 @@ export function parseRecipientPartyAliases(
     aliases[key] = value;
   }
 
+  // Alias policy guard: block non-operator keys mapping to operator party
+  if (process.env.ALLOW_OPERATOR_ALIAS_OVERRIDE !== "true") {
+    const operatorParty = process.env.CANTON_PARTY || "";
+    if (operatorParty) {
+      const operatorHint = operatorParty.split("::")[0];
+      for (const [from, to] of Object.entries(aliases)) {
+        const fromHint = from.split("::")[0];
+        const isFromOperator = fromHint === operatorHint;
+        const isToOperator = to === operatorParty || to.split("::")[0] === operatorHint;
+        if (!isFromOperator && isToOperator) {
+          throw new Error(
+            `${sourceName} ALIAS POLICY VIOLATION: Key "${from.slice(0, 24)}..." ` +
+            `maps to operator party. This masks real user balances. ` +
+            `Fix: map to the user's own funded party, or set ALLOW_OPERATOR_ALIAS_OVERRIDE=true.`
+          );
+        }
+      }
+    }
+  }
+
   return aliases;
 }
 

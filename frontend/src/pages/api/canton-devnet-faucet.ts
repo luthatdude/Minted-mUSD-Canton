@@ -142,7 +142,7 @@ function getDailyCap(): number {
 
 function getCooldownSeconds(): number {
   const raw = parseInt(process.env.DEVNET_FAUCET_COOLDOWN_SECONDS || "", 10);
-  return Number.isFinite(raw) && raw > 0 ? raw : 30; // default: 30 seconds
+  return Number.isFinite(raw) && raw >= 0 ? raw : 30; // default: 30 seconds
 }
 
 // ── Canton API helper ───────────────────────────────────────
@@ -407,7 +407,7 @@ export default async function handler(
     };
 
     const templateExtras: Record<FaucetAsset, Record<string, unknown>> = {
-      mUSD: { agreementHash: "", agreementUri: "" },
+      mUSD: { agreementHash: "0000000000000000000000000000000000000000000000000000000000000000", agreementUri: "devnet-faucet" },
       CTN: {},
       USDC: {},
       USDCx: { sourceChain: "0", cctpNonce: "0" },

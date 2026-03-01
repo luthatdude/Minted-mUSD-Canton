@@ -16,6 +16,7 @@ import {
   type SimpleToken,
 } from "@/hooks/useCantonLedger";
 import { useLoopWallet } from "@/hooks/useLoopWallet";
+import { sanitizeCantonError } from "@/lib/canton-error";
 
 type ActionTab = "deposit" | "borrow" | "repay" | "withdraw";
 type CollateralAsset = "CTN" | "SMUSD" | "SMUSDE";
@@ -87,6 +88,24 @@ function pickEscrowForWithdraw(escrows: EscrowInfo[], collateralType: string, re
   if (candidates.length === 0) return null;
   const covering = candidates.find((escrow) => parseFloat(escrow.amount || "0") >= requested);
   return covering || null;
+}
+
+function pickExistingEscrow(escrows: EscrowInfo[], collateralType: string): EscrowInfo | null {
+  const matches = escrows
+    .filter((escrow) => escrow.collateralType === collateralType)
+    .sort((a, b) => parseFloat(b.amount || "0") - parseFloat(a.amount || "0"));
+  return matches[0] || null;
+}
+
+function pickPrimaryDebtCid(rows: CantonBalancesData["debtPositions"] | undefined, owner: string): string | null {
+  const debts = (rows || []).filter((row) => row.owner === owner);
+  if (debts.length === 0) return null;
+  const selected = debts.sort((a, b) => {
+    const aTotal = parseFloat(a.debtMusd || "0") + parseFloat(a.interestAccrued || "0");
+    const bTotal = parseFloat(b.debtMusd || "0") + parseFloat(b.interestAccrued || "0");
+    return bTotal - aTotal;
+  })[0];
+  return selected?.contractId || null;
 }
 
 function resolvePriceFeedCidForCollateralType(
@@ -175,6 +194,7 @@ export function CantonBorrow() {
 
   const userMusdTokens = useMemo(() => data?.tokens || [], [data?.tokens]);
   const userMusdBalance = userMusdTokens.reduce((sum, token) => sum + parseFloat(token.amount || "0"), 0);
+  const largestMusdToken = userMusdTokens.reduce((max, token) => Math.max(max, parseFloat(token.amount || "0")), 0);
 
   const collateralInfos = useMemo<CantonCollateralInfo[]>(() => {
     // Use merged user+operator price feeds so cards render even when user has no feeds
@@ -257,6 +277,8 @@ export function CantonBorrow() {
     (sum, row) => sum + parseFloat(row.debtMusd || "0") + parseFloat(row.interestAccrued || "0"),
     0
   );
+  // Repay uses one contract per tx — cap MAX to what a single token can cover
+  const repayMaxAmount = outstandingDebt > 0 ? Math.min(largestMusdToken, outstandingDebt) : 0;
   const totalCollateralUsd = collateralInfos.reduce((sum, row) => sum + row.valueUsd, 0);
   const borrowCapacityUsd = collateralInfos.reduce((sum, row) => sum + (row.valueUsd * row.factorBps) / 10000, 0);
   const maxBorrowableUsd = Math.max(borrowCapacityUsd - outstandingDebt, 0);
@@ -304,6 +326,17 @@ export function CantonBorrow() {
     setResult(null);
   }
 
+  async function ensureFreshPrices(): Promise<void> {
+    const priceResult = await refreshPriceFeeds();
+    if (!priceResult.success) {
+      throw new Error(
+        priceResult.error
+          ? `Failed to refresh price feeds: ${priceResult.error}`
+          : "Failed to refresh price feeds. Please try again."
+      );
+    }
+  }
+
   async function handleAction() {
     if (!activeParty || !hasConnectedUserParty) {
       setTxError("Connect your Loop wallet first.");
@@ -334,24 +367,42 @@ export function CantonBorrow() {
       if (action === "deposit") {
         const available = getAssetContracts(collateralAsset, fresh);
         const selected = pickContractForAmount(available, parsedAmount);
+        const collateralType = COLLATERAL_META[collateralAsset].collateralType;
+        const existingEscrow = pickExistingEscrow(freshEscrows, collateralType);
         if (!selected) {
           const maxAvailable = available.reduce((max, token) => Math.max(max, parseFloat(token.amount || "0")), 0);
+          const sym = COLLATERAL_META[collateralAsset].symbol;
           throw new Error(
             maxAvailable > 0
-              ? `No ${COLLATERAL_META[collateralAsset].symbol} contract large enough. Largest available is ${fmtAmount(maxAvailable)}.`
-              : `No ${COLLATERAL_META[collateralAsset].symbol} contracts available to deposit.`
+              ? `No single ${sym} contract covers ${fmtAmount(parsedAmount)}. Largest single contract: ${fmtAmount(maxAvailable)} ${sym}. Use an amount <= ${fmtAmount(maxAvailable)} or consolidate your ${sym} tokens first.`
+              : `No ${sym} contracts available to deposit.`
           );
         }
 
         if (collateralAsset === "CTN") {
           choice = "Lending_DepositCTN";
-          argument = { user: activeParty, coinCid: selected.contractId };
+          argument = {
+            user: activeParty,
+            coinCid: selected.contractId,
+            existingEscrowCid: existingEscrow?.contractId || null,
+            collateralAggCid: null,
+          };
         } else if (collateralAsset === "SMUSD") {
           choice = "Lending_DepositSMUSD";
-          argument = { user: activeParty, smusdCid: selected.contractId };
+          argument = {
+            user: activeParty,
+            smusdCid: selected.contractId,
+            existingEscrowCid: existingEscrow?.contractId || null,
+            collateralAggCid: null,
+          };
         } else {
           choice = "Lending_DepositSMUSDE";
-          argument = { user: activeParty, smusdeCid: selected.contractId };
+          argument = {
+            user: activeParty,
+            smusdeCid: selected.contractId,
+            existingEscrowCid: existingEscrow?.contractId || null,
+            collateralAggCid: null,
+          };
         }
       } else if (action === "borrow") {
         if (parsedAmount <= 0) {
@@ -361,13 +412,18 @@ export function CantonBorrow() {
           throw new Error("Deposit collateral first.");
         }
 
-        await refreshPriceFeeds();
+        await ensureFreshPrices();
         const postRefresh = await fetchFreshBalances(activeParty);
         const postRefreshOperator = await fetchFreshBalances(null).catch(() => operatorFresh);
         const postRefreshEscrows = (postRefresh.escrowPositions || []).filter((row) => row.owner === activeParty);
         if (postRefreshEscrows.length === 0) {
           throw new Error("Deposit collateral first.");
         }
+        const directMintServiceCid =
+          postRefresh.directMintService?.contractId ||
+          postRefreshOperator?.directMintService?.contractId ||
+          null;
+        const existingDebtCid = pickPrimaryDebtCid(postRefresh.debtPositions, activeParty);
         const postRefreshFeeds = mergePriceFeeds(postRefresh, postRefreshOperator);
         const { escrowCids, priceFeedCids } = buildEscrowPriceFeedPairs(postRefreshEscrows, postRefreshFeeds);
         choice = "Lending_Borrow";
@@ -376,6 +432,8 @@ export function CantonBorrow() {
           borrowAmount: parsedAmount.toString(),
           escrowCids,
           priceFeedCids,
+          directMintServiceCid,
+          existingDebtCid,
         };
       } else if (action === "repay") {
         if (parsedAmount <= 0) {
@@ -408,7 +466,7 @@ export function CantonBorrow() {
           if (nativeResult.success) {
             console.log("[CantonBorrow] Native repay succeeded:", nativeResult.commandId);
             setResult(`Repay submitted on Canton (native CIP-56 path).`);
-            setAmount(""); refresh();
+            setAmount(""); await refresh();
             return;
           }
           // Native failed — surface error to user (hybrid fallback decommissioned)
@@ -477,7 +535,7 @@ export function CantonBorrow() {
           throw new Error("Enter a valid withdraw amount.");
         }
 
-        await refreshPriceFeeds();
+        await ensureFreshPrices();
         const postRefresh = await fetchFreshBalances(activeParty);
         const postRefreshOperator = await fetchFreshBalances(null).catch(() => operatorFresh);
 
@@ -485,6 +543,7 @@ export function CantonBorrow() {
         const postRefreshEscrows = (postRefresh.escrowPositions || []).filter((row) => row.owner === activeParty);
         const escrow = pickEscrowForWithdraw(postRefreshEscrows, collateralType, parsedAmount);
         if (!escrow) {
+          const sym = COLLATERAL_META[collateralAsset].symbol;
           const sameTypeRows = postRefreshEscrows.filter((row) => row.collateralType === collateralType);
           const maxAvailable = sameTypeRows.reduce((max, row) => Math.max(max, parseFloat(row.amount || "0")), 0);
           const availableTypes = Array.from(
@@ -497,10 +556,10 @@ export function CantonBorrow() {
           );
           throw new Error(
             maxAvailable > 0
-              ? `No ${COLLATERAL_META[collateralAsset].symbol} escrow can cover ${fmtAmount(parsedAmount)}. Largest is ${fmtAmount(maxAvailable)}.`
+              ? `No single ${sym} escrow covers ${fmtAmount(parsedAmount)}. Largest single escrow: ${fmtAmount(maxAvailable)} ${sym}. Use an amount <= ${fmtAmount(maxAvailable)} or consolidate your escrow positions first.`
               : availableTypes.length > 0
-                ? `No active ${COLLATERAL_META[collateralAsset].symbol} escrow positions found. Available escrow types: ${availableTypes.join(", ")}.`
-                : `No active ${COLLATERAL_META[collateralAsset].symbol} escrow positions found.`
+                ? `No active ${sym} escrow positions found. Available escrow types: ${availableTypes.join(", ")}.`
+                : `No active ${sym} escrow positions found.`
           );
         }
 
@@ -515,6 +574,7 @@ export function CantonBorrow() {
         const postRefreshFeeds = mergePriceFeeds(postRefresh, postRefreshOperator);
         const otherEscrows = postRefreshEscrows.filter((row) => row.contractId !== escrow.contractId);
         const otherEscrowPairs = buildEscrowPriceFeedPairs(otherEscrows, postRefreshFeeds);
+        const existingDebtCid = pickPrimaryDebtCid(postRefresh.debtPositions, activeParty);
         const expectedWithdrawFeedCid = resolvePriceFeedCidForCollateralType(collateralType, postRefreshFeeds);
         if (!expectedWithdrawFeedCid) {
           throw new Error(`Missing price feed for withdraw collateral type ${collateralType}.`);
@@ -533,6 +593,8 @@ export function CantonBorrow() {
           otherEscrowCids: otherEscrowPairs.escrowCids,
           // DAML withdraw checks fetch prices for both remaining positions and the current collateral symbol.
           priceFeedCids: withdrawPriceFeedCids,
+          existingDebtCid,
+          collateralAggCid: null,
         };
       }
 
@@ -543,10 +605,10 @@ export function CantonBorrow() {
 
       setResult(`${action.charAt(0).toUpperCase() + action.slice(1)} submitted on Canton.`);
       setAmount("");
-      refresh();
+      await refresh();
     } catch (err: any) {
       console.error("[CantonBorrow] action failed:", err);
-      setTxError(err.message || "Action failed");
+      setTxError(sanitizeCantonError(err.message || "Action failed").message);
     } finally {
       setSubmitting(false);
     }
@@ -573,11 +635,12 @@ export function CantonBorrow() {
   }
 
   if (error && !data) {
+    const { message: sanitizedError } = sanitizeCantonError(error);
     return (
       <div className="flex min-h-[400px] items-center justify-center">
         <div className="card-gradient-border max-w-md p-8 text-center">
           <h3 className="mb-2 text-xl font-semibold text-white">Canton Lending Unavailable</h3>
-          <p className="mb-4 text-gray-400">{error}</p>
+          <p className="mb-4 text-gray-400">{sanitizedError}</p>
           <button
             onClick={refresh}
             className="rounded-xl border border-amber-500/40 bg-amber-500/15 px-5 py-2 text-sm font-medium text-amber-300 hover:bg-amber-500/25"
@@ -766,10 +829,10 @@ export function CantonBorrow() {
                           MAX
                         </button>
                       )}
-                      {action === "repay" && outstandingDebt > 0 && (
+                      {action === "repay" && outstandingDebt > 0 && repayMaxAmount > 0 && (
                         <button
                           className="rounded-lg bg-brand-500/20 px-3 py-1.5 text-xs font-semibold text-brand-400 transition-colors hover:bg-brand-500/30"
-                          onClick={() => setAmount(Math.min(userMusdBalance, outstandingDebt).toFixed(4))}
+                          onClick={() => setAmount(repayMaxAmount.toFixed(4))}
                         >
                           MAX
                         </button>
@@ -808,6 +871,12 @@ export function CantonBorrow() {
               {action === "deposit" && (
                 <p className="text-xs text-gray-500">
                   Contract-based routing is automatic. Enter an amount and the closest matching token contract is selected.
+                </p>
+              )}
+
+              {action === "repay" && outstandingDebt > 0 && largestMusdToken < outstandingDebt && largestMusdToken > 0 && (
+                <p className="text-xs text-gray-500">
+                  Repay uses one mUSD contract per transaction. MAX is capped to the largest available contract ({fmtAmount(largestMusdToken)} mUSD). Multiple transactions may be needed to fully clear your debt.
                 </p>
               )}
 
