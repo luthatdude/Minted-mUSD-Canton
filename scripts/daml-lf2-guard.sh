@@ -27,12 +27,38 @@ while IFS= read -r line; do
   BLOCKED+=("$line")
 done < "$BLOCKLIST"
 
-if [ ${#BLOCKED[@]} -eq 0 ]; then
-  echo "FAIL: Blocklist is empty after parsing"
-  exit 1
-fi
-
 ERRORS=0
+
+if [ ${#BLOCKED[@]} -eq 0 ]; then
+  echo "=== Blocklist empty: all modules unblocked ==="
+  echo "OK: LF2 migration complete — no modules remain blocked"
+  echo ""
+  # Still run key-declaration check across all files as a regression guard
+  echo "=== Regression check: No key declarations in any source file ==="
+  KEY_ERRORS=0
+  KEY_PATTERN="^[[:space:]]*key[[:space:]]"
+  for daml_file in "$REPO_ROOT"/daml/*.daml; do
+    [ -f "$daml_file" ] || continue
+    if grep -qE "$KEY_PATTERN" "$daml_file" 2>/dev/null; then
+      matches=$(grep -nE "$KEY_PATTERN" "$daml_file" 2>/dev/null || true)
+      echo "FAIL: $(basename "$daml_file") has key declaration(s):"
+      echo "$matches" | sed 's/^/  /'
+      KEY_ERRORS=$((KEY_ERRORS + 1))
+    fi
+  done
+  if [ $KEY_ERRORS -eq 0 ]; then
+    echo "OK: No key declarations found in any DAML source file"
+  else
+    ERRORS=$((ERRORS + KEY_ERRORS))
+  fi
+  echo ""
+  if [ $ERRORS -gt 0 ]; then
+    echo "FAIL: $ERRORS regression violation(s) found"
+    exit 1
+  fi
+  echo "PASS: LF2 migration complete — 0 blocked modules, 0 key declarations"
+  exit 0
+fi
 
 # ── 1. All blocked files must exist ────────────────────────────────
 echo "=== Check 1: Blocked files exist ==="
