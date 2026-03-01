@@ -26,11 +26,11 @@ npx hardhat test
 npx hardhat coverage  # 90% threshold enforced
 
 # DAML (requires SDK 3.4.10)
-# WARNING: Do NOT run `daml build` directly in daml/ — 8 modules are LF2-blocked.
-# Use the LF2-safe build wrapper instead:
-bash scripts/daml-build-lf2.sh            # build (excludes blocked modules)
-bash scripts/daml-build-lf2.sh --no-test  # build only, skip tests
-bash scripts/daml-lf2-guard.sh            # validate blocklist integrity
+# LF2 migration complete — all modules compile under LF2.
+cd daml && daml build                     # full build (all modules)
+cd daml && daml test                      # run DAML test suites
+bash scripts/daml-lf2-guard.sh            # regression guard (no key declarations)
+bash scripts/daml-build-lf2.sh            # legacy wrapper (still works)
 
 # Relay / Bot / Frontend
 cd relay && npm install && npm run build
