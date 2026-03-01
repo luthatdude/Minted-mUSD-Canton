@@ -2295,8 +2295,8 @@ class RelayService {
               msg.includes("INVALID_ARGUMENT") &&
               (msg.includes("validators") || msg.includes("requiredSignatures") || msg.includes("requiredSignaturesvalidators"));
             const missingExtendedFields =
-              msg.includes("INVALID_ARGUMENT") &&
-              msg.includes("Missing fields") &&
+              (msg.includes("INVALID_ARGUMENT") || msg.includes("COMMAND_PREPROCESSING_FAILED")) &&
+              (msg.includes("Missing fields") || msg.includes("Missing non-optional field")) &&
               (msg.includes("validators") || msg.includes("requiredSignatures"));
 
             if (usedExtended && hasUnexpectedExtendedFields) {

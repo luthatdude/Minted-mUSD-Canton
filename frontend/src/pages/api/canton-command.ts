@@ -6,6 +6,7 @@ import {
   getCantonParty,
   getCantonUser,
   getPackageId,
+  getLendingPackageId,
   validateConfig,
   PKG_ID_PATTERN,
   guardMethod,
@@ -37,6 +38,7 @@ const ALLOW_OPERATOR_FALLBACK =
  */
 function buildTemplateMap(): Record<string, string> {
   const pkgId = getPackageId();
+  const lendingPkgId = getLendingPackageId();
   return {
     // CantonDirectMint module
     CantonMUSD:              `${pkgId}:CantonDirectMint:CantonMUSD`,
@@ -53,11 +55,11 @@ function buildTemplateMap(): Record<string, string> {
     // CantonBoostPool module
     CantonBoostPoolService:  `${pkgId}:CantonBoostPool:CantonBoostPoolService`,
     BoostPoolLP:             `${pkgId}:CantonBoostPool:BoostPoolLP`,
-    // CantonLending module
-    CantonLendingService:    `${pkgId}:CantonLending:CantonLendingService`,
-    CantonPriceFeed:         `${pkgId}:CantonLending:CantonPriceFeed`,
-    EscrowedCollateral:      `${pkgId}:CantonLending:EscrowedCollateral`,
-    CantonDebtPosition:      `${pkgId}:CantonLending:CantonDebtPosition`,
+    // CantonLending module (separate package — LF2-compatible build)
+    CantonLendingService:    `${lendingPkgId}:CantonLending:CantonLendingService`,
+    CantonPriceFeed:         `${lendingPkgId}:CantonLending:CantonPriceFeed`,
+    EscrowedCollateral:      `${lendingPkgId}:CantonLending:EscrowedCollateral`,
+    CantonDebtPosition:      `${lendingPkgId}:CantonLending:CantonDebtPosition`,
     // CantonCoinToken module
     CantonCoin:              `${pkgId}:CantonCoinToken:CantonCoin`,
     // CantonCoinMint module

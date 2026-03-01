@@ -22,6 +22,8 @@ const PACKAGE_ID =
   process.env.NEXT_PUBLIC_DAML_PACKAGE_ID ||
   process.env.CANTON_PACKAGE_ID ||
   "";
+const LENDING_PACKAGE_ID =
+  process.env.CANTON_LENDING_PACKAGE_ID || PACKAGE_ID;
 const PKG_ID_PATTERN = /^[0-9a-f]{64}$/i;
 
 function validateRequiredConfig(): string | null {
@@ -177,6 +179,10 @@ function templateId(moduleName: string, entityName: string): string {
   return `${PACKAGE_ID}:${moduleName}:${entityName}`;
 }
 
+function lendingTemplateId(entityName: string): string {
+  return `${LENDING_PACKAGE_ID}:CantonLending:${entityName}`;
+}
+
 function buildEventFormat(party: string, fullTemplateId: string): Record<string, unknown> {
   return {
     filtersByParty: {
@@ -287,12 +293,12 @@ export default async function handler(
       templateId("CantonSMUSD", "CantonStakingService"),
       templateId("CantonETHPool", "CantonETHPoolService"),
       templateId("CantonBoostPool", "CantonBoostPoolService"),
-      templateId("CantonLending", "CantonLendingService"),
-      templateId("CantonLending", "CantonPriceFeed"),
+      lendingTemplateId("CantonLendingService"),
+      lendingTemplateId("CantonPriceFeed"),
       templateId("CantonETHPool", "CantonSMUSD_E"),
       templateId("CantonBoostPool", "BoostPoolLP"),
-      templateId("CantonLending", "EscrowedCollateral"),
-      templateId("CantonLending", "CantonDebtPosition"),
+      lendingTemplateId("EscrowedCollateral"),
+      lendingTemplateId("CantonDebtPosition"),
       templateId("CantonDirectMint", "CantonDirectMintService"),
       templateId("CantonSMUSD", "CantonSMUSD"),
       templateId("CantonCoinToken", "CantonCoin"),
@@ -599,7 +605,7 @@ export default async function handler(
           templateId("CantonSMUSD", "CantonStakingService"),
           templateId("CantonETHPool", "CantonETHPoolService"),
           templateId("CantonBoostPool", "CantonBoostPoolService"),
-          templateId("CantonLending", "CantonLendingService"),
+          lendingTemplateId("CantonLendingService"),
         ] as const;
 
         const operatorGroups = await Promise.all(

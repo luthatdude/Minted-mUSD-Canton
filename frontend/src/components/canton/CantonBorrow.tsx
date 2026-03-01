@@ -90,6 +90,24 @@ function pickEscrowForWithdraw(escrows: EscrowInfo[], collateralType: string, re
   return covering || null;
 }
 
+function pickExistingEscrow(escrows: EscrowInfo[], collateralType: string): EscrowInfo | null {
+  const matches = escrows
+    .filter((escrow) => escrow.collateralType === collateralType)
+    .sort((a, b) => parseFloat(b.amount || "0") - parseFloat(a.amount || "0"));
+  return matches[0] || null;
+}
+
+function pickPrimaryDebtCid(rows: CantonBalancesData["debtPositions"] | undefined, owner: string): string | null {
+  const debts = (rows || []).filter((row) => row.owner === owner);
+  if (debts.length === 0) return null;
+  const selected = debts.sort((a, b) => {
+    const aTotal = parseFloat(a.debtMusd || "0") + parseFloat(a.interestAccrued || "0");
+    const bTotal = parseFloat(b.debtMusd || "0") + parseFloat(b.interestAccrued || "0");
+    return bTotal - aTotal;
+  })[0];
+  return selected?.contractId || null;
+}
+
 function resolvePriceFeedCidForCollateralType(
   collateralType: string,
   feeds: CantonBalancesData["priceFeeds"] | undefined
@@ -349,6 +367,8 @@ export function CantonBorrow() {
       if (action === "deposit") {
         const available = getAssetContracts(collateralAsset, fresh);
         const selected = pickContractForAmount(available, parsedAmount);
+        const collateralType = COLLATERAL_META[collateralAsset].collateralType;
+        const existingEscrow = pickExistingEscrow(freshEscrows, collateralType);
         if (!selected) {
           const maxAvailable = available.reduce((max, token) => Math.max(max, parseFloat(token.amount || "0")), 0);
           const sym = COLLATERAL_META[collateralAsset].symbol;
@@ -361,13 +381,28 @@ export function CantonBorrow() {
 
         if (collateralAsset === "CTN") {
           choice = "Lending_DepositCTN";
-          argument = { user: activeParty, coinCid: selected.contractId };
+          argument = {
+            user: activeParty,
+            coinCid: selected.contractId,
+            existingEscrowCid: existingEscrow?.contractId || null,
+            collateralAggCid: null,
+          };
         } else if (collateralAsset === "SMUSD") {
           choice = "Lending_DepositSMUSD";
-          argument = { user: activeParty, smusdCid: selected.contractId };
+          argument = {
+            user: activeParty,
+            smusdCid: selected.contractId,
+            existingEscrowCid: existingEscrow?.contractId || null,
+            collateralAggCid: null,
+          };
         } else {
           choice = "Lending_DepositSMUSDE";
-          argument = { user: activeParty, smusdeCid: selected.contractId };
+          argument = {
+            user: activeParty,
+            smusdeCid: selected.contractId,
+            existingEscrowCid: existingEscrow?.contractId || null,
+            collateralAggCid: null,
+          };
         }
       } else if (action === "borrow") {
         if (parsedAmount <= 0) {
@@ -384,6 +419,11 @@ export function CantonBorrow() {
         if (postRefreshEscrows.length === 0) {
           throw new Error("Deposit collateral first.");
         }
+        const directMintServiceCid =
+          postRefresh.directMintService?.contractId ||
+          postRefreshOperator?.directMintService?.contractId ||
+          null;
+        const existingDebtCid = pickPrimaryDebtCid(postRefresh.debtPositions, activeParty);
         const postRefreshFeeds = mergePriceFeeds(postRefresh, postRefreshOperator);
         const { escrowCids, priceFeedCids } = buildEscrowPriceFeedPairs(postRefreshEscrows, postRefreshFeeds);
         choice = "Lending_Borrow";
@@ -392,6 +432,8 @@ export function CantonBorrow() {
           borrowAmount: parsedAmount.toString(),
           escrowCids,
           priceFeedCids,
+          directMintServiceCid,
+          existingDebtCid,
         };
       } else if (action === "repay") {
         if (parsedAmount <= 0) {
@@ -532,6 +574,7 @@ export function CantonBorrow() {
         const postRefreshFeeds = mergePriceFeeds(postRefresh, postRefreshOperator);
         const otherEscrows = postRefreshEscrows.filter((row) => row.contractId !== escrow.contractId);
         const otherEscrowPairs = buildEscrowPriceFeedPairs(otherEscrows, postRefreshFeeds);
+        const existingDebtCid = pickPrimaryDebtCid(postRefresh.debtPositions, activeParty);
         const expectedWithdrawFeedCid = resolvePriceFeedCidForCollateralType(collateralType, postRefreshFeeds);
         if (!expectedWithdrawFeedCid) {
           throw new Error(`Missing price feed for withdraw collateral type ${collateralType}.`);
@@ -550,6 +593,8 @@ export function CantonBorrow() {
           otherEscrowCids: otherEscrowPairs.escrowCids,
           // DAML withdraw checks fetch prices for both remaining positions and the current collateral symbol.
           priceFeedCids: withdrawPriceFeedCids,
+          existingDebtCid,
+          collateralAggCid: null,
         };
       }
 
