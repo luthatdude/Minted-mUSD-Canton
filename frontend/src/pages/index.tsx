@@ -5,6 +5,7 @@ import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import { useWCContracts } from "@/hooks/useWCContracts";
 import { useChainState } from "@/hooks/useChain";
 import { useLoopWallet } from "@/hooks/useLoopWallet";
+import { LandingGate } from "@/landing";
 
 // Ethereum pages
 import { DashboardPage } from "./DashboardPage";
@@ -32,6 +33,19 @@ export default function Home() {
   const chainState = useChainState();
   const loopWallet = useLoopWallet();
   const [page, setPage] = useState("dashboard");
+
+  // ── Wallet gate: show landing if no wallet connected ──
+  const isConnected = !!(wallet.address || loopWallet.partyId);
+  if (!isConnected) {
+    return (
+      <LandingGate
+        onConnectEthereum={() => wallet.connectMetaMask()}
+        onConnectCanton={() => loopWallet.connect()}
+        isEthConnecting={wallet.isConnecting}
+        isCantonConnecting={loopWallet.isConnecting}
+      />
+    );
+  }
 
   // Keep URL in sync with active page for deep-linkable navigation
   useEffect(() => {
