@@ -43,6 +43,7 @@ function makeRelayConfig(stateFilePath: string) {
     replayLookbackBlocks: 200000,
     maxRedemptionEthPayoutWei: ethers.parseUnits("50000", 18),
     autoGrantBridgeRoleForRedemptions: false,
+    cantonPackageId: "0000000000000000000000000000000000000000000000000000000000000000",
   };
 }
 
@@ -54,6 +55,7 @@ async function loadRelayModule(): Promise<RelayModule> {
     process.env.MUSD_TOKEN_ADDRESS || "0x4444444444444444444444444444444444444444";
   process.env.CANTON_USE_TLS = process.env.CANTON_USE_TLS || "false";
   process.env.NODE_ENV = process.env.NODE_ENV || "test";
+  process.env.CANTON_PACKAGE_ID = process.env.CANTON_PACKAGE_ID || "0000000000000000000000000000000000000000000000000000000000000000";
 
   return (await import("../relay-service")) as RelayModule;
 }

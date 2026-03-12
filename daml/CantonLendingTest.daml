@@ -216,6 +216,8 @@ testDepositCTN = do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
+      existingEscrowCid = None
+      collateralAggCid = None
 
   -- Verify escrow
   escrow <- queryContractId setup.operator escrowCid
@@ -240,6 +242,8 @@ testDepositUSDC = do
     exerciseCmd setup.serviceCid Lending_DepositUSDC with
       user = setup.user
       usdcCid
+      existingEscrowCid = None
+      collateralAggCid = None
 
   escrow <- queryContractId setup.operator escrowCid
   assertMsg "Escrowed 5000 USDC" ((fromSome escrow).amount == 5000.0)
@@ -274,6 +278,8 @@ testDepositSMUSD = do
     exerciseCmd setup.serviceCid Lending_DepositSMUSD with
       user = setup.user
       smusdCid
+      existingEscrowCid = None
+      collateralAggCid = None
 
   escrow <- queryContractId setup.operator escrowCid
   assertMsg "Escrowed 1000 sMUSD shares" ((fromSome escrow).amount == 1000.0)
@@ -300,6 +306,8 @@ testDepositFailsWhenPaused = do
     exerciseCmd pausedServiceCid Lending_DepositCTN with
       user = setup.user
       coinCid
+      existingEscrowCid = None
+      collateralAggCid = None
   debug "✅ 9. Deposit fails when paused"
 
 -- ============================================================
@@ -322,6 +330,8 @@ testBorrowAgainstCTN = do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
+      existingEscrowCid = None
+      collateralAggCid = None
 
   -- Borrow 500 mUSD (well under $1105 limit)
   (svc2, debtCid, musdCid) <- submitMulti [setup.user] [setup.operator] do
@@ -331,6 +341,7 @@ testBorrowAgainstCTN = do
       escrowCids = [escrowCid]
       priceFeedCids = [setup.ctnFeedCid]
       directMintServiceCid = None
+      existingDebtCid = None
 
   -- Verify debt position
   debt <- queryContractId setup.operator debtCid
@@ -357,6 +368,8 @@ testBorrowExceedsLTV = do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
+      existingEscrowCid = None
+      collateralAggCid = None
 
   -- Try to borrow 1200 mUSD (exceeds $1105 limit)
   submitMultiMustFail [setup.user] [setup.operator] do
@@ -366,6 +379,7 @@ testBorrowExceedsLTV = do
       escrowCids = [escrowCid]
       priceFeedCids = [setup.ctnFeedCid]
       directMintServiceCid = None
+      existingDebtCid = None
   debug "✅ 11. Borrow exceeding LTV rejected"
 
 testBorrowBelowMinimum : Script ()
@@ -382,6 +396,8 @@ testBorrowBelowMinimum = do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
+      existingEscrowCid = None
+      collateralAggCid = None
 
   -- Try to borrow 5 mUSD (below 10 mUSD minimum)
   submitMultiMustFail [setup.user] [setup.operator] do
@@ -391,6 +407,7 @@ testBorrowBelowMinimum = do
       escrowCids = [escrowCid]
       priceFeedCids = [setup.ctnFeedCid]
       directMintServiceCid = None
+      existingDebtCid = None
   debug "✅ 12. Borrow below minimum rejected"
 
 -- ============================================================
@@ -412,6 +429,8 @@ testRepayDebt = do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
+      existingEscrowCid = None
+      collateralAggCid = None
 
   (svc2, debtCid, musdCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc1 Lending_Borrow with
@@ -420,6 +439,7 @@ testRepayDebt = do
       escrowCids = [escrowCid]
       priceFeedCids = [setup.ctnFeedCid]
       directMintServiceCid = None
+      existingDebtCid = None
 
   -- Repay with the borrowed mUSD
   (svc3, newDebtCid) <- submitMulti [setup.user] [setup.operator] do
@@ -453,6 +473,8 @@ testWithdrawCollateral = do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
+      existingEscrowCid = None
+      collateralAggCid = None
 
   -- Withdraw 5000 CTN (no debt, so no health check needed)
   (svc2, returnedCoinCid) <- submitMulti [setup.user] [setup.operator] do
@@ -462,6 +484,8 @@ testWithdrawCollateral = do
       withdrawAmount = 5000.0
       otherEscrowCids = []
       priceFeedCids = [setup.ctnFeedCid]
+      existingDebtCid = None
+      collateralAggCid = None
 
   -- Verify returned token
   coin <- queryContractId setup.operator returnedCoinCid
@@ -488,6 +512,8 @@ testLiquidation = do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
+      existingEscrowCid = None
+      collateralAggCid = None
 
   (svc2, debtCid, _musdCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc1 Lending_Borrow with
@@ -496,6 +522,7 @@ testLiquidation = do
       escrowCids = [escrowCid]
       priceFeedCids = [setup.ctnFeedCid]
       directMintServiceCid = None
+      existingDebtCid = None
 
   -- CTN price crashes to $0.10 (emergency override)
   -- 10000 CTN * $0.10 = $1000 raw value
@@ -555,6 +582,8 @@ testLiquidationHealthyPositionFails = do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
+      existingEscrowCid = None
+      collateralAggCid = None
 
   (svc2, debtCid, _musdCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc1 Lending_Borrow with
@@ -563,6 +592,7 @@ testLiquidationHealthyPositionFails = do
       escrowCids = [escrowCid]
       priceFeedCids = [setup.ctnFeedCid]
       directMintServiceCid = None
+      existingDebtCid = None
 
   -- Liquidator's mUSD
   liqMusdCid <- submitMulti [setup.operator, setup.liquidator] [] do
@@ -613,11 +643,15 @@ testMultiCollateralBorrow = do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
+      existingEscrowCid = None
+      collateralAggCid = None
 
   (svc2, usdcEscrowCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc1 Lending_DepositUSDC with
       user = setup.user
       usdcCid
+      existingEscrowCid = None
+      collateralAggCid = None
 
   -- CTN: 5000 * $0.17 * 65% = $552.50
   -- USDC: 1000 * $1.00 * 95% = $950.00
@@ -630,6 +664,7 @@ testMultiCollateralBorrow = do
       escrowCids = [ctnEscrowCid, usdcEscrowCid]
       priceFeedCids = [setup.ctnFeedCid, setup.usdcFeedCid]
       directMintServiceCid = None
+      existingDebtCid = None
 
   debt <- queryContractId setup.operator debtCid
   assertMsg "Borrowed 1400" ((fromSome debt).principalDebt == 1400.0)
@@ -901,6 +936,8 @@ testUnauthorizedDeposit = do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = attacker
       coinCid
+      existingEscrowCid = None
+      collateralAggCid = None
   debug "✅ 28. Unauthorized deposit rejected"
 
 -- ============================================================
@@ -922,6 +959,8 @@ testBorrowAgainstUSDCHighLTV = do
     exerciseCmd setup.serviceCid Lending_DepositUSDC with
       user = setup.user
       usdcCid
+      existingEscrowCid = None
+      collateralAggCid = None
 
   -- Borrow 9000 mUSD (under 9500 limit)
   (svc2, debtCid, musdCid) <- submitMulti [setup.user] [setup.operator] do
@@ -931,6 +970,7 @@ testBorrowAgainstUSDCHighLTV = do
       escrowCids = [escrowCid]
       priceFeedCids = [setup.usdcFeedCid]
       directMintServiceCid = None
+      existingDebtCid = None
 
   debt <- queryContractId setup.operator debtCid
   assertMsg "Borrowed 9000" ((fromSome debt).principalDebt == 9000.0)
@@ -955,6 +995,8 @@ testFullLifecycle = do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
+      existingEscrowCid = None
+      collateralAggCid = None
 
   -- 2. Borrow 500 mUSD
   (svc2, debtCid, musdCid) <- submitMulti [setup.user] [setup.operator] do
@@ -964,6 +1006,7 @@ testFullLifecycle = do
       escrowCids = [escrowCid]
       priceFeedCids = [setup.ctnFeedCid]
       directMintServiceCid = None
+      existingDebtCid = None
 
   -- 3. Repay 500 mUSD
   (svc3, newDebtCid) <- submitMulti [setup.user] [setup.operator] do
@@ -980,6 +1023,8 @@ testFullLifecycle = do
       withdrawAmount = 10000.0
       otherEscrowCids = []
       priceFeedCids = [setup.ctnFeedCid]
+      existingDebtCid = None
+      collateralAggCid = None
 
   coin <- queryContractId setup.operator returnedCoinCid
   assertMsg "Got all 10000 CTN back" ((fromSome coin).amount == 10000.0)
@@ -1002,6 +1047,8 @@ borrowSetup setup = do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
+      existingEscrowCid = None
+      collateralAggCid = None
   (svc2, debtCid, _) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc1 Lending_Borrow with
       user = setup.user
@@ -1009,6 +1056,7 @@ borrowSetup setup = do
       escrowCids = [escrowCid]
       priceFeedCids = [setup.ctnFeedCid]
       directMintServiceCid = None
+      existingDebtCid = None
   return (svc2, debtCid)
 
 -- | Helper: create operator-owned inventory mUSD

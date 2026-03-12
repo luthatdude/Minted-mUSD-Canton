@@ -8,6 +8,7 @@ import { useLoopWallet } from "@/hooks/useLoopWallet";
 import { CantonIdentityStatus } from "./CantonIdentityStatus";
 import { CONTRACTS } from "@/lib/config";
 import { formatTimestamp, formatUSD } from "@/lib/format";
+import { sanitizeCantonError } from "@/lib/canton-error";
 
 type TxStatus = "idle" | "bridging" | "success" | "error";
 type EthereumBridgeData = {
@@ -310,7 +311,7 @@ export function CantonBridge() {
       }, 4000);
     } catch (err: any) {
       console.error("[CantonBridge] Redeem failed:", err);
-      setTxError(err.message || "Redemption failed");
+      setTxError(sanitizeCantonError(err.message || "Redemption failed").message);
       setTxStatus("error");
     }
   }
@@ -332,11 +333,19 @@ export function CantonBridge() {
   }
 
   if (error && !data) {
+    const { message: sanitizedError, tag } = sanitizeCantonError(error);
     return (
       <div className="flex min-h-[400px] items-center justify-center">
         <div className="max-w-md space-y-4 text-center">
-          <h3 className="text-xl font-semibold text-white">Canton Unavailable</h3>
-          <p className="text-sm text-gray-400">{error}</p>
+          <h3 className="text-xl font-semibold text-white">
+            {tag === "INFRA" ? "Canton Network Unreachable" : "Canton Unavailable"}
+          </h3>
+          <p className="text-sm text-gray-400">{sanitizedError}</p>
+          {tag === "INFRA" && (
+            <p className="text-xs text-gray-500">
+              The Canton participant or relay service may be offline. Bridge operations require a live Canton connection.
+            </p>
+          )}
           <button onClick={() => void handleRefresh()} className="rounded-xl bg-purple-600 px-6 py-2 font-medium text-white hover:bg-purple-500">
             Retry
           </button>

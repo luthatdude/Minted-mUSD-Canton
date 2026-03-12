@@ -18,6 +18,8 @@ const PACKAGE_ID =
   process.env.NEXT_PUBLIC_DAML_PACKAGE_ID ||
   process.env.CANTON_PACKAGE_ID ||
   "";
+const LENDING_PACKAGE_ID =
+  process.env.CANTON_LENDING_PACKAGE_ID || PACKAGE_ID;
 const CANTON_PARTY_PATTERN = /^[A-Za-z0-9._:-]+::1220[0-9a-f]{64}$/i;
 const PKG_ID_PATTERN = /^[0-9a-f]{64}$/i;
 
@@ -29,7 +31,7 @@ function validateRequiredConfig(): string | null {
   return null;
 }
 
-const PRICE_FEED_TEMPLATE = `${PACKAGE_ID}:CantonLending:CantonPriceFeed`;
+const PRICE_FEED_TEMPLATE = `${LENDING_PACKAGE_ID}:CantonLending:CantonPriceFeed`;
 
 async function cantonRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
   const resp = await fetch(`${CANTON_BASE_URL}${path}`, {

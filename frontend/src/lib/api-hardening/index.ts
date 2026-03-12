@@ -13,6 +13,7 @@ export {
   getCantonParty,
   getCantonUser,
   getPackageId,
+  getLendingPackageId,
   getCip56PackageId,
   getV3PackageIds,
   validateConfig,

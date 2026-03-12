@@ -43,6 +43,13 @@ export function getPackageId(): string {
   );
 }
 
+export function getLendingPackageId(): string {
+  return (
+    process.env.CANTON_LENDING_PACKAGE_ID ||
+    getPackageId()
+  );
+}
+
 export function getCip56PackageId(): string {
   return (
     process.env.NEXT_PUBLIC_CIP56_PACKAGE_ID ||

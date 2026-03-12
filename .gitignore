@@ -50,3 +50,20 @@ nohup.out
 *.bak
 *.bak2
 .next/
+
+# Generated build artifacts (must not be tracked)
+relay/dist/
+frontend/tsconfig.tsbuildinfo
+
+# macOS
+.DS_Store
+
+# iCloud sync duplicates (macOS conflict copies)
+*\ 2.ts
+*\ 2.tsx
+*\ 3.tsx
+*\ 2.json
+*\ 2.md
+
+# Quarantine backups
+.tmp/

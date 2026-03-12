@@ -365,8 +365,10 @@ cd daml && daml test       # DAML
 npm install
 npx hardhat compile         # Compile Solidity
 npx hardhat test            # Run Solidity tests
-cd daml && daml build       # Build DAML
-cd daml && daml test        # Run DAML tests
+bash scripts/daml-build-lf2.sh  # Build DAML (LF2-safe, excludes blocked modules)
+# WARNING: Do NOT run `cd daml && daml build` directly — blocked modules will
+# fail under SDK 3.4.10 (LF 2.x). Use the wrapper above instead.
+# See docs/plans/daml-lf2-key-removal-plan.md for migration status.
 ```
 
 ### Frontend
@@ -420,9 +422,25 @@ NEXT_PUBLIC_CANTON_TOKEN=<JWT_TOKEN>
 ### Prerequisites
 
 - Node.js 20+
-- DAML SDK 2.10.3
+- DAML SDK 3.4.10 (Canton 3.4.x requires LF 2.x — do NOT use SDK 2.10.x)
 - Docker (for relay service)
 - kubectl (for K8s deployment)
+
+### LF2 Blocked Modules
+
+8 DAML modules contain contract-key declarations incompatible with LF 2.x.
+They are excluded from the build surface until refactored. See `daml/lf2-blocked-modules.txt`.
+
+```bash
+bash scripts/daml-lf2-guard.sh                # Validate blocklist + imports + keys
+bash scripts/daml-build-lf2.sh                # Build LF2-safe DAR (excludes blocked)
+bash scripts/install-pre-push-daml-lf2-guard.sh  # Install pre-push hook
+bash scripts/check-no-operator-alias.sh --all    # Check alias policy violations
+```
+
+### Relay Package ID
+
+The relay validates `CANTON_PACKAGE_ID` at startup and periodically. If the configured package ID doesn't match what's deployed on Canton, `/health` returns 503. Set `CANTON_PACKAGE_ID` in `relay/.env.development`.
 
 ## CI/CD
 

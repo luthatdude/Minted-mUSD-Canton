@@ -6,6 +6,7 @@ import {
   getCantonParty,
   getCantonUser,
   getPackageId,
+  getLendingPackageId,
   getCip56PackageId,
   getV3PackageIds,
   validateConfig,
@@ -272,7 +273,8 @@ export default async function handler(
     }
 
     // 6. Query CantonLendingService
-    const svcTemplateId = `${PACKAGE_ID}:CantonLending:CantonLendingService`;
+    const LENDING_PKG = getLendingPackageId();
+    const svcTemplateId = `${LENDING_PKG}:CantonLending:CantonLendingService`;
     const svcContracts = await queryActiveContracts(operatorParty, offset, svcTemplateId);
     if (svcContracts.length === 0) {
       return res.status(404).json({

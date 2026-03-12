@@ -13,6 +13,7 @@ import {
   type CantonBalancesData,
   type SimpleToken,
 } from "@/hooks/useCantonLedger";
+import { sanitizeCantonError, isStaleContractError } from "@/lib/canton-error";
 
 type CantonPoolTab = "smusd" | "ethpool" | "boostpool";
 type StakeAction = "stake" | "unstake";
@@ -58,6 +59,29 @@ function pickExactOrCoveringToken(tokens: SimpleToken[], requested: number): Sim
   const exact = tokens.find((token) => Math.abs(parseTokenAmount(token) - requested) <= 0.000001);
   if (exact) return exact;
   return pickCoveringToken(tokens, requested);
+}
+
+/** Extract CantonSMUSD contract IDs created by a split command result. */
+function extractCreatedSmusdCids(result: unknown): Set<string> {
+  const cids = new Set<string>();
+  if (!result || typeof result !== "object") return cids;
+  function walk(node: unknown): void {
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    const rec = node as Record<string, unknown>;
+    // Match createdEvent shape: { contractId, templateId }
+    const evt = rec.createdEvent && typeof rec.createdEvent === "object"
+      ? (rec.createdEvent as Record<string, unknown>)
+      : rec;
+    const tid = typeof evt.templateId === "string" ? evt.templateId : "";
+    const cid = typeof evt.contractId === "string" ? evt.contractId : "";
+    if (cid && (tid === "CantonSMUSD" || tid.endsWith(":CantonSMUSD"))) {
+      cids.add(cid);
+    }
+    Object.values(rec).forEach((v) => { if (v && typeof v === "object") walk(v); });
+  }
+  walk(result);
+  return cids;
 }
 
 export function CantonStake() {
@@ -133,13 +157,13 @@ export function CantonStake() {
 
   const smusdSharePrice = stakingService ? parseFloat(stakingService.sharePrice) : 1.0;
   const smusdTVL = stakingService ? parseFloat(stakingService.pooledMusd) : 0;
-  const smusdApy = Math.max(0, (smusdSharePrice - 1) * 100);
+  const smusdTotalReturnPct = Math.max(0, (smusdSharePrice - 1) * 100);
   const smusdPositionValue = totalSmusd * smusdSharePrice;
 
   const ethPoolSharePrice = ethPoolService ? parseFloat(ethPoolService.sharePrice) : 1.0;
   const ethPoolTVL = ethPoolService ? parseFloat(ethPoolService.totalMusdStaked) : 0;
   const boostSharePrice = boostPoolService ? parseFloat(boostPoolService.globalSharePrice) : 1.0;
-  const boostApy = Math.max(0, (boostSharePrice - 1) * 100);
+  const boostTotalReturnPct = Math.max(0, (boostSharePrice - 1) * 100);
 
   async function selectTokenForRequestedAmount(
     party: string,
@@ -251,7 +275,7 @@ export function CantonStake() {
         }, { party: fresh.party });
         if (!resp.success) {
           const errMsg = resp.error || "Stake failed";
-          if (["CONTRACT_NOT_FOUND", "Contract could not be found with id", "INCONSISTENT"].some(s => errMsg.includes(s))) {
+          if (isStaleContractError(errMsg)) {
             // Retry once with fully fresh data
             const retryFresh = await fetchFreshBalances(activeParty);
             let retrySvc = retryFresh.stakingService;
@@ -260,7 +284,7 @@ export function CantonStake() {
             const retryToken = pickExactOrCoveringToken(retryFresh.tokens || [], parsedAmount);
             if (!retryToken) throw new Error("No mUSD token available on retry.");
             const retryResp = await cantonExercise("CantonStakingService", retrySvc.contractId, "Stake", { user: retryFresh.party, musdCid: retryToken.contractId }, { party: retryFresh.party });
-            if (!retryResp.success) throw new Error("Stake failed after retry. Please try again.");
+            if (!retryResp.success) throw new Error(`Stake failed after retry (stale contract race): ${sanitizeCantonError(retryResp.error || "").message}`);
             setTxSuccess(`Staked ${fmtAmount(parsedAmount)} mUSD → smUSD shares (retried after stale CID)`);
             setAmount(""); await refresh(); void loadPreflight();
             return;
@@ -272,35 +296,67 @@ export function CantonStake() {
       } else {
         // ── Multi-contract sequential stake ──
         // No single token covers the requested amount, but total does.
+        // Each step refreshes both service CID (consuming choice) and token list
+        // to avoid stale-CID failures from concurrent ledger activity.
         console.log("[CantonStake] Multi-contract stake:", { requested: parsedAmount, totalAvailable, tokenCount: freshTokens.length });
-        const sorted = [...freshTokens].sort((a, b) => parseTokenAmount(b) - parseTokenAmount(a));
         let remaining = parsedAmount;
         let stakesCompleted = 0;
         let currentParty = fresh.party;
         let currentServiceCid = freshService.contractId;
+        // Track consumed CIDs to avoid re-selecting them
+        const consumedCids = new Set<string>();
 
-        for (const token of sorted) {
-          if (remaining <= EPSILON) break;
+        while (remaining > EPSILON) {
+          // Refresh token list every step to get current CIDs
+          const stepFresh = stakesCompleted === 0 ? fresh : await fetchFreshBalances(activeParty);
+          const availableTokens = (stepFresh.tokens || [])
+            .filter(t => !consumedCids.has(t.contractId) && parseTokenAmount(t) > EPSILON);
+
+          if (availableTokens.length === 0) {
+            throw new Error(`Could only stake ${fmtAmount(parsedAmount - remaining)} of ${fmtAmount(parsedAmount)} mUSD. No more tokens available.`);
+          }
+
+          // Pick the best token for this step
+          const sorted = [...availableTokens].sort((a, b) => parseTokenAmount(b) - parseTokenAmount(a));
+          const token = sorted[0];
           const tokenAmt = parseTokenAmount(token);
-          if (tokenAmt <= EPSILON) continue;
+
+          // Refresh service CID if we've completed a prior step
+          if (stakesCompleted > 0) {
+            let svc = stepFresh.stakingService;
+            if (!svc) { const opF = await fetchFreshBalances(null).catch(() => null); svc = opF?.stakingService || null; }
+            if (!svc) throw new Error("Staking service not found during multi-token stake");
+            currentServiceCid = svc.contractId;
+            currentParty = stepFresh.party;
+          }
 
           if (tokenAmt <= remaining + EPSILON) {
-            // Use entire token
+            // Use entire token — with one retry on stale CID
             const resp = await cantonExercise("CantonStakingService", currentServiceCid, "Stake", {
               user: currentParty, musdCid: token.contractId,
             }, { party: currentParty });
-            if (!resp.success) throw new Error(resp.error || `Stake step ${stakesCompleted + 1} failed`);
-            remaining -= tokenAmt;
-            stakesCompleted++;
-            // Refresh service CID (Stake is consuming)
-            if (remaining > EPSILON) {
-              const reFresh = await fetchFreshBalances(activeParty);
-              let svc = reFresh.stakingService;
-              if (!svc) { const opF = await fetchFreshBalances(null).catch(() => null); svc = opF?.stakingService || null; }
-              if (!svc) throw new Error("Staking service not found during multi-token stake");
-              currentServiceCid = svc.contractId;
-              currentParty = reFresh.party;
+            if (!resp.success) {
+              if (isStaleContractError(resp.error || "")) {
+                // One retry with fully fresh data
+                const retryFresh = await fetchFreshBalances(activeParty);
+                let retrySvc = retryFresh.stakingService;
+                if (!retrySvc) { const opF = await fetchFreshBalances(null).catch(() => null); retrySvc = opF?.stakingService || null; }
+                if (!retrySvc) throw new Error("Staking service not found on retry");
+                const retryTokens = (retryFresh.tokens || []).filter(t => !consumedCids.has(t.contractId) && parseTokenAmount(t) > EPSILON);
+                const retryToken = retryTokens.sort((a, b) => parseTokenAmount(b) - parseTokenAmount(a))[0];
+                if (!retryToken) throw new Error(`Stake step ${stakesCompleted + 1} failed: no token available after stale contract retry.`);
+                const retryResp = await cantonExercise("CantonStakingService", retrySvc.contractId, "Stake", { user: retryFresh.party, musdCid: retryToken.contractId }, { party: retryFresh.party });
+                if (!retryResp.success) throw new Error(`Stake step ${stakesCompleted + 1} failed after retry: ${sanitizeCantonError(retryResp.error || "").message}`);
+                consumedCids.add(retryToken.contractId);
+                remaining -= parseTokenAmount(retryToken);
+              } else {
+                throw new Error(`Stake step ${stakesCompleted + 1} failed: ${sanitizeCantonError(resp.error || "").message}`);
+              }
+            } else {
+              consumedCids.add(token.contractId);
+              remaining -= tokenAmt;
             }
+            stakesCompleted++;
           } else {
             // Token larger than remaining — split and stake
             const splitResp = await cantonExercise("CantonMUSD", token.contractId, "CantonMUSD_Split", { splitAmount: remaining.toString() }, { party: currentParty });
@@ -314,7 +370,7 @@ export function CantonStake() {
             const resp = await cantonExercise("CantonStakingService", svc.contractId, "Stake", {
               user: afterSplit.party, musdCid: splitToken.contractId,
             }, { party: afterSplit.party });
-            if (!resp.success) throw new Error(resp.error || "Stake failed after split");
+            if (!resp.success) throw new Error(`Stake after split failed: ${sanitizeCantonError(resp.error || "").message}`);
             remaining = 0;
             stakesCompleted++;
           }
@@ -326,7 +382,7 @@ export function CantonStake() {
         setTxSuccess(`Staked ${fmtAmount(parsedAmount)} mUSD → smUSD shares (${stakesCompleted} transactions)`);
         setAmount(""); await refresh(); void loadPreflight();
       }
-    } catch (err: any) { setTxError(err.message); }
+    } catch (err: any) { setTxError(sanitizeCantonError(err.message || "").message); }
     finally { setTxLoading(false); }
   }
 
@@ -335,6 +391,7 @@ export function CantonStake() {
     setTxLoading(true); setTxError(null); setTxSuccess(null);
     try {
       if (!hasConnectedUserParty || !activeParty) throw new Error("Connect your Loop wallet party first.");
+      if (parsedAmount <= 0) throw new Error("Enter a valid smUSD amount to unstake.");
       // Fetch fresh data (Unstake is consuming on CantonStakingService)
       const fresh = await fetchFreshBalances(activeParty);
       let freshService = fresh.stakingService;
@@ -346,13 +403,54 @@ export function CantonStake() {
       const freshSmusd = fresh.smusdTokens || [];
       const smusd = freshSmusd[selectedAssetIdx] || freshSmusd[0];
       if (!smusd) throw new Error("No smUSD shares available");
+
+      const selectedAmt = parseTokenAmount(smusd);
+      if (parsedAmount > selectedAmt + EPSILON) {
+        throw new Error(`Requested ${fmtAmount(parsedAmount, 4)} smUSD exceeds selected position (${fmtAmount(selectedAmt, 4)} smUSD).`);
+      }
+
+      let unstakeCid = smusd.contractId;
+      let unstakeAmt = selectedAmt;
+
+      // Partial unstake: split the smUSD token first
+      if (parsedAmount < selectedAmt - EPSILON) {
+        const splitResp = await cantonExercise("CantonSMUSD", smusd.contractId, "SMUSD_Split", {
+          splitShares: parsedAmount.toString(),
+        }, { party: fresh.party });
+        if (!splitResp.success) throw new Error(splitResp.error || "Failed to split smUSD token.");
+        const createdSplitCids = extractCreatedSmusdCids(splitResp.result);
+        const afterSplit = await fetchFreshBalances(activeParty);
+        const splitTokens = afterSplit.smusdTokens || [];
+        const candidates = createdSplitCids.size > 0
+          ? splitTokens.filter(t => createdSplitCids.has(t.contractId))
+          : splitTokens;
+        const splitPiece = candidates.find(t => Math.abs(parseTokenAmount(t) - parsedAmount) <= 0.000001);
+        if (!splitPiece) {
+          throw new Error(
+            createdSplitCids.size > 0
+              ? "Unable to locate exact split smUSD token among split-created contracts; aborting to prevent wrong-position unstake."
+              : "Unable to find exact split smUSD token after split; aborting to prevent over-unstake."
+          );
+        }
+        unstakeCid = splitPiece.contractId;
+        unstakeAmt = parseTokenAmount(splitPiece);
+        // Refresh service CID (split may have consumed it)
+        freshService = afterSplit.stakingService || freshService;
+        if (!freshService) {
+          const opF = await fetchFreshBalances(null).catch(() => null);
+          freshService = opF?.stakingService || null;
+        }
+        if (!freshService) throw new Error("Staking service not found after split");
+      }
+
       const resp = await cantonExercise("CantonStakingService", freshService.contractId, "Unstake", {
-        user: fresh.party, smusdCid: smusd.contractId,
+        user: fresh.party, smusdCid: unstakeCid,
       }, { party: fresh.party });
       if (!resp.success) throw new Error(resp.error || "Unstake failed");
-      setTxSuccess(`Unstaked ${fmtAmount(smusd.amount)} smUSD → mUSD`);
+      setTxSuccess(`Unstaked ${fmtAmount(unstakeAmt, 4)} smUSD → mUSD`);
+      setAmount("");
       await refresh(); void loadPreflight();
-    } catch (err: any) { setTxError(err.message); }
+    } catch (err: any) { setTxError(sanitizeCantonError(err.message || "").message); }
     finally { setTxLoading(false); }
   }
 
@@ -417,7 +515,7 @@ export function CantonStake() {
       if (!resp.success) throw new Error(resp.error || "Stake failed");
       setTxSuccess(`Deposited ${fmtAmount(parsedAmount)} ${depositAsset} → smUSD-E shares`);
       setAmount(""); await refresh();
-    } catch (err: any) { setTxError(err.message); }
+    } catch (err: any) { setTxError(sanitizeCantonError(err.message || "").message); }
     finally { setTxLoading(false); }
   }
 
@@ -454,7 +552,7 @@ export function CantonStake() {
       setTxSuccess(`Unstaked ${fmtAmount(parsedAmount, 4)} smUSD-E → mUSD`);
       setAmount("");
       await refresh();
-    } catch (err: any) { setTxError(err.message); }
+    } catch (err: any) { setTxError(sanitizeCantonError(err.message || "").message); }
     finally { setTxLoading(false); }
   }
 
@@ -495,7 +593,7 @@ export function CantonStake() {
       if (!resp.success) throw new Error(resp.error || "Deposit failed");
       setTxSuccess(`Deposited ${fmtAmount(parsedAmount)} CTN → Boost LP`);
       setAmount(""); await refresh();
-    } catch (err: any) { setTxError(err.message); }
+    } catch (err: any) { setTxError(sanitizeCantonError(err.message || "").message); }
     finally { setTxLoading(false); }
   }
 
@@ -521,7 +619,7 @@ export function CantonStake() {
       if (!resp.success) throw new Error(resp.error || "Withdraw failed");
       setTxSuccess(`Withdrew Boost LP → CTN`);
       await refresh();
-    } catch (err: any) { setTxError(err.message); }
+    } catch (err: any) { setTxError(sanitizeCantonError(err.message || "").message); }
     finally { setTxLoading(false); }
   }
 
@@ -537,11 +635,19 @@ export function CantonStake() {
     );
   }
   if (error && !data) {
+    const { message: sanitizedError, tag } = sanitizeCantonError(error);
     return (
       <div className="flex min-h-[400px] items-center justify-center">
         <div className="max-w-md space-y-4 text-center">
-          <h3 className="text-xl font-semibold text-white">Canton Unavailable</h3>
-          <p className="text-sm text-gray-400">{error}</p>
+          <h3 className="text-xl font-semibold text-white">
+            {tag === "INFRA" ? "Canton Network Unreachable" : "Canton Unavailable"}
+          </h3>
+          <p className="text-sm text-gray-400">{sanitizedError}</p>
+          {tag === "INFRA" && (
+            <p className="text-xs text-gray-500">
+              The Canton participant or relay service may be offline. Staking operations require a live Canton connection.
+            </p>
+          )}
           <button onClick={refresh} className="rounded-xl bg-emerald-600 px-6 py-2 font-medium text-white hover:bg-emerald-500">Retry</button>
         </div>
       </div>
@@ -728,7 +834,7 @@ export function CantonStake() {
                         <div className="space-y-3">
                           <label className="text-sm font-medium text-gray-400">Select smUSD Position to Unstake</label>
                           {smusdTokens.map((smusd, idx) => (
-                            <button key={smusd.contractId} onClick={() => setSelectedAssetIdx(idx)}
+                            <button key={smusd.contractId} onClick={() => { setSelectedAssetIdx(idx); setAmount(""); }}
                               className={`w-full rounded-xl border p-4 text-left transition-all ${selectedAssetIdx === idx ? "border-emerald-500 bg-emerald-500/10" : "border-white/10 bg-surface-800/50 hover:border-white/30"}`}>
                               <div className="flex items-center justify-between">
                                 <div>
@@ -739,7 +845,38 @@ export function CantonStake() {
                               </div>
                             </button>
                           ))}
-                          <TxButton onClick={handleSmusdUnstake} loading={txLoading} disabled={smusdTokens.length === 0} className="w-full">
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <label className="text-sm font-medium text-gray-400">Unstake Amount</label>
+                              <span className="text-xs text-gray-500">
+                                Position: {fmtAmount(smusdTokens[selectedAssetIdx]?.amount || smusdTokens[0]?.amount || "0", 4)} smUSD
+                              </span>
+                            </div>
+                            <div className="relative rounded-xl border border-white/10 bg-surface-800/50 p-4 transition-all duration-300 focus-within:border-emerald-500/50 focus-within:shadow-[0_0_20px_-5px_rgba(16,185,129,0.3)]">
+                              <div className="flex items-center gap-4">
+                                <input
+                                  type="number"
+                                  className="flex-1 bg-transparent text-2xl font-semibold text-white placeholder-gray-600 focus:outline-none"
+                                  placeholder="0.00"
+                                  value={amount}
+                                  onChange={(e) => setAmount(e.target.value)}
+                                />
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    className="rounded-lg bg-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-400 transition-colors hover:bg-emerald-500/30"
+                                    onClick={() => setAmount(smusdTokens[selectedAssetIdx]?.amount || smusdTokens[0]?.amount || "0")}
+                                  >
+                                    MAX
+                                  </button>
+                                  <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
+                                    <div className="h-6 w-6 rounded-full bg-gradient-to-br from-emerald-500 to-teal-500" />
+                                    <span className="font-semibold text-white">smUSD</span>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                          <TxButton onClick={handleSmusdUnstake} loading={txLoading} disabled={smusdTokens.length === 0 || parsedAmount <= 0} className="w-full">
                             <span className="flex items-center justify-center gap-2">
                               Unstake smUSD → mUSD
                             </span>
@@ -757,7 +894,7 @@ export function CantonStake() {
               <div className="space-y-4">
                 <div className="grid gap-4 grid-cols-2">
                   <StatCard label="Share Price" value={`${smusdSharePrice.toFixed(4)} mUSD`} subValue="per smUSD" color="green" />
-                  <StatCard label="Estimated APY" value={`${smusdApy.toFixed(2)}%`} color="green" />
+                  <StatCard label="Total Return" value={`${smusdTotalReturnPct.toFixed(2)}%`} color="green" />
                   <StatCard label="Available mUSD" value={hasConnectedUserParty ? fmtAmount(totalMusd) : "—"} subValue={hasConnectedUserParty ? `${tokens.length} contracts` : "Connect wallet"} color="blue" />
                   <StatCard label="Your smUSD" value={hasConnectedUserParty ? fmtAmount(totalSmusd, 4) : "—"} subValue={hasConnectedUserParty && totalSmusd > 0 ? `\u2248 ${fmtAmount(smusdPositionValue)} mUSD` : hasConnectedUserParty ? undefined : "Connect wallet"} color="purple" />
                 </div>
@@ -949,7 +1086,7 @@ export function CantonStake() {
               <div className="space-y-4">
                 <div className="grid gap-4 grid-cols-2">
                   <StatCard label="Share Price" value={`${ethPoolSharePrice.toFixed(4)} mUSD`} subValue="per smUSD-E" color="blue" />
-                  <StatCard label="Estimated APY %" value={`${Math.max(0, (ethPoolSharePrice - 1) * 100).toFixed(2)}%`} color="green" />
+                  <StatCard label="Total Return" value={`${Math.max(0, (ethPoolSharePrice - 1) * 100).toFixed(2)}%`} color="green" />
                   <StatCard
                     label="Your mUSD Balance"
                     value={hasConnectedUserParty ? fmtAmount(totalMusd) : "—"}
@@ -1158,7 +1295,7 @@ export function CantonStake() {
                   <StatCard label="CTN Price" value={`${parseFloat(boostPoolService.cantonPriceMusd).toFixed(4)} mUSD`} color="yellow" />
                   <StatCard label="Share Price" value={`${parseFloat(boostPoolService.globalSharePrice).toFixed(4)}`} subValue="per Boost LP" color="green" />
                   <StatCard label="Total CTN Deposited" value={fmtAmount(boostPoolService.totalCantonDeposited)} color="blue" />
-                  <StatCard label="APY" value={`${boostApy.toFixed(2)}%`} color="purple" />
+                  <StatCard label="Total Return" value={`${boostTotalReturnPct.toFixed(2)}%`} color="purple" />
                 </div>
                 <div className="card overflow-hidden">
                   <h3 className="text-sm font-medium text-gray-400 mb-3">Your Boost Positions</h3>

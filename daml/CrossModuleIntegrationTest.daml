@@ -192,6 +192,8 @@ testLendingFullCycleIntegration = do
     exerciseCmd serviceCid Lending_DepositCTN with
       user
       coinCid
+      existingEscrowCid = None
+      collateralAggCid = None
 
   -- Step 2: Borrow 500 mUSD
   (svc2, debtCid, musdCid) <- submitMulti [user] [operator] do
@@ -201,6 +203,7 @@ testLendingFullCycleIntegration = do
       escrowCids = [escrowCid]
       priceFeedCids = [ctnFeedCid]
       directMintServiceCid = None
+      existingDebtCid = None
 
   -- Verify debt
   debt <- queryContractId operator debtCid
@@ -221,6 +224,8 @@ testLendingFullCycleIntegration = do
       withdrawAmount = 10000.0
       otherEscrowCids = []
       priceFeedCids = [ctnFeedCid]
+      existingDebtCid = None
+      collateralAggCid = None
 
   coin <- queryContractId operator returnedCoinCid
   assertMsg "Got 10000 CTN back" ((fromSome coin).amount == 10000.0)
@@ -421,6 +426,8 @@ testLiquidationFlow = do
     exerciseCmd serviceCid Lending_DepositCTN with
       user = borrower
       coinCid
+      existingEscrowCid = None
+      collateralAggCid = None
 
   (svc2, debtCid, _musdCid) <- submitMulti [borrower] [operator] do
     exerciseCmd svc1 Lending_Borrow with
@@ -429,6 +436,7 @@ testLiquidationFlow = do
       escrowCids = [escrowCid]
       priceFeedCids = [ctnFeedCid]
       directMintServiceCid = None
+      existingDebtCid = None
 
   -- Crash price → position undercollateralized
   passTime (hours 1)
@@ -536,6 +544,8 @@ testHealthyPositionNotLiquidatable = do
     exerciseCmd serviceCid Lending_DepositCTN with
       user = borrower
       coinCid
+      existingEscrowCid = None
+      collateralAggCid = None
 
   -- Borrow a small amount (well-collateralized)
   (svc2, debtCid, _musdCid) <- submitMulti [borrower] [operator] do
@@ -545,6 +555,7 @@ testHealthyPositionNotLiquidatable = do
       escrowCids = [escrowCid]
       priceFeedCids = [ctnFeedCid]
       directMintServiceCid = None
+      existingDebtCid = None
 
   liqMusdCid <- submitMulti [operator, keeper] [] do
     createCmd CantonMUSD with
@@ -574,8 +585,8 @@ testHealthyPositionNotLiquidatable = do
 --
 --     This test validates D-M04 — preventing a user from using
 --     sMUSD that is already escrowed as lending collateral to qualify for
---     BoostPool deposits. The Deposit choice now checks via lookupByKey
---     that no EscrowedCollateral exists for (operator, user, CTN_SMUSD).
+--     BoostPool deposits. The Deposit choice checks that no
+--     EscrowedCollateral exists for (operator, user, CTN_SMUSD).
 --     Full BoostPool service setup requires extensive template
 --     instantiation (pool config, reward tracking, etc.) and is tested
 --     in CantonBoostPool's own unit tests.
@@ -701,6 +712,8 @@ testSupplyCapCoordination = do
     exerciseCmd lendingCid Lending_DepositCTN with
       user
       coinCid
+      existingEscrowCid = None
+      collateralAggCid = None
 
   -- Try to borrow 11M mUSD → should fail because DM has 40M + 11M = 51M > 50M globalMintCap
   submitMultiMustFail [user] [operator] do
@@ -710,4 +723,5 @@ testSupplyCapCoordination = do
       escrowCids = [escrowCid]
       priceFeedCids = [ctnFeedCid]
       directMintServiceCid = Some dmServiceCid
+      existingDebtCid = None
   debug "✅ Integration 10: Supply cap coordination between Lending + DirectMint (D-M02)"
